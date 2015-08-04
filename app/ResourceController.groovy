@@ -399,6 +399,10 @@ class ResourceController extends ApiController {
     }*/
 
 
+
+
+
+
     def createResource(parentId, xmlResource, prototypeName) {
 
         if (!xmlResource) {
@@ -466,31 +470,31 @@ class ResourceController extends ApiController {
 
 
 
+
+
     def create(params) {
         def failureXml = null
         def createRequest = new XmlParser().parseText(getPostData())
-        def resource = null
-        //def parentId = createRequest['Resource'][0].'@copyToId'
+        //pp = new XmlNodePrinter(new PrintWriter(new StringWriter()), "  ")
+        //pp.print(xmlstring)
 
         createRequest.Resource.each{
             type1 ->
-            //print "parentId: "+ null + " ResourcePrototype Name: " + type1.ResourcePrototype.'@name' + "\n"
 
             type1.Resource.each {
                 type2 ->
 
-                //print "parentId: "+ type1.'@copyToId'?.toInteger() + " ResourcePrototype Name: " + type2.ResourcePrototype.'@name' + "\n"
+                //type2 work 
                 def server = createResource(type1.'@copyToId'?.toInteger(), type2, type2.ResourcePrototype.'@name')
-                if (resource == null) {
-                    log.warn("ERROR: Failed creating server.. " + type2.'@name' + "with prototype: " + type2.ResourcePrototype.'@name');
+                if (server == null) {
+                    log.warn("HQAPI ERROR: Failed creating server.. " + type2.'@name' + "with prototype: " + type2.ResourcePrototype.'@name');
                     failureXml = getFailureXML(ErrorCode.INVALID_PARAMETERS, 
-                        "ERROR: Failed creating server.. " 
+                        "HQAPI ERROR: Failed creating server.. " 
                         + type2.'@name' + "with prototype: " 
                         + type2.ResourcePrototype.'@name'
                     ) 
-                    return false;
                 } else { 
-                    log.warn("INFO: created server.. " + type2.'@name' 
+                    log.warn("HQAPI INFO: created server.. " + type2.'@name' 
                     + "with prototype: " + type2.ResourcePrototype.'@name' 
                     + "with resource id: " + server.id);
                     failureXml = getFailureXML(ErrorCode.INVALID_PARAMETERS)
@@ -498,29 +502,24 @@ class ResourceController extends ApiController {
 
                 type2.Resource.each {
                     type3 ->
-                    //print "parentId: "+ type2.'@id'?.toInteger() + " ResourcePrototype Name: " + type3.ResourcePrototype.'@name' + "\n"
-                    //resource = createResource(type2.'@id'?.toInteger(), type3, type3.ResourcePrototype.'@name')
+
+                    //type3 work 
                     def service = createResource(server.id, type3, type3.ResourcePrototype.'@name')
-                    if (resource == null) {
-                        log.warn("ERROR: Failed creating server.. " + type2.'@name' + "with prototype: " + type2.ResourcePrototype.'@name');
+                    if (service == null) {
+                        log.warn("HQAPI ERROR: Failed creating server.. " + type2.'@name' + "with prototype: " + type2.ResourcePrototype.'@name');
                         failureXml = getFailureXML(ErrorCode.INVALID_PARAMETERS, 
-                           "Error creating service.. " + type3.'@name' + "with prototype: " 
+                           "HQAPI Error creating service.. " + type3.'@name' + "with prototype: " 
                            + type3.ResourcePrototype.'@name' + "with resource id: "
                         )
-                        return false;
                     } else { 
-                        log.warn("INFO: created service.. " 
+                        log.warn("HQAPI INFO: created service.. " 
                         + type3.'@name' + "with prototype: " 
                         + type3.ResourcePrototype.'@name' 
                         + "with resource id: " + service.id);
                     }
 
                 } //type3
-
-
             } //type2
-
-
         } //type1
 
         renderXml() {
@@ -533,35 +532,6 @@ class ResourceController extends ApiController {
             }
         }
     }
-
-    /*def create(params) {
-
-        def failureXml = null
-        def createRequest = new XmlParser().parseText(getPostData())
-        def parentId = createRequest['Resource'][0].'@copyToId'
-
-        for (xmlResource in createRequest['Resource']) {
-            if (xmlResource.'@typeId'.toInteger() == 1) 
-                continue; 
-            def prototypeXml = xmlResource['ResourcePrototype']
-            failureXml = createResource(parentId, xmlResource, prototypeXml.'@name')
-            if (failureXml != null) {
-                break;
-            } else { 
-                log.warn("Created .. " + xmlResource.'@name' + "with prototype: " + prototype.'@name');
-            }
-        }
-
-        renderXml() {
-            StatusResponse() {
-                if (failureXml) {
-                    out << failureXml
-                } else {
-                    out << getSuccessXML()
-                }
-            }
-        }
-    }*/
 
 
 
