@@ -407,7 +407,7 @@ class ResourceController extends ApiController {
                     out << getFailureXML(ErrorCode.INVALID_PARAMETERS)
                 }
             }
-            return
+            return null
         }
 
         def parent = getResource(parentId.toInteger())
@@ -422,7 +422,7 @@ class ResourceController extends ApiController {
                                          " not found")
                 }
             }
-            return
+            return null
         }
 
         if (!prototype) {
@@ -434,7 +434,7 @@ class ResourceController extends ApiController {
                                          " not found")
                 }
             }
-            return
+            return null
         }
 
         def resourceXml = xmlResource
@@ -459,18 +459,17 @@ class ResourceController extends ApiController {
                 }
             }
             log.warn("Error creating resource", t)
-            return
+            return null
         }
-
-        return null
+        return resource
     }
 
 
 
     def create(params) {
-
         def failureXml = null
         def createRequest = new XmlParser().parseText(getPostData())
+        def resource = null
         //def parentId = createRequest['Resource'][0].'@copyToId'
 
         createRequest.Resource.each{
@@ -479,22 +478,41 @@ class ResourceController extends ApiController {
 
             type1.Resource.each {
                 type2 ->
+
                 //print "parentId: "+ type1.'@copyToId'?.toInteger() + " ResourcePrototype Name: " + type2.ResourcePrototype.'@name' + "\n"
-                failureXml = createResource(type1.'@copyToId'?.toInteger(), type2, type2.ResourcePrototype.'@name')
-                if (failureXml != null) {
+                def server = createResource(type1.'@copyToId'?.toInteger(), type2, type2.ResourcePrototype.'@name')
+                if (resource == null) {
+                    log.warn("ERROR: Failed creating server.. " + type2.'@name' + "with prototype: " + type2.ResourcePrototype.'@name');
+                    failureXml = getFailureXML(ErrorCode.INVALID_PARAMETERS, 
+                        "ERROR: Failed creating server.. " 
+                        + type2.'@name' + "with prototype: " 
+                        + type2.ResourcePrototype.'@name'
+                    ) 
                     return false;
                 } else { 
-                    log.warn("Created Server.. " + type2.'@name' + "with prototype: " + type2.ResourcePrototype.'@name');
+                    log.warn("INFO: created server.. " + type2.'@name' 
+                    + "with prototype: " + type2.ResourcePrototype.'@name' 
+                    + "with resource id: " + server.id);
+                    failureXml = getFailureXML(ErrorCode.INVALID_PARAMETERS)
                 }
 
                 type2.Resource.each {
                     type3 ->
                     //print "parentId: "+ type2.'@id'?.toInteger() + " ResourcePrototype Name: " + type3.ResourcePrototype.'@name' + "\n"
-                    failureXml = createResource(type2.'@id'?.toInteger(), type3, type3.ResourcePrototype.'@name')
-                    if (failureXml != null) {
+                    //resource = createResource(type2.'@id'?.toInteger(), type3, type3.ResourcePrototype.'@name')
+                    def service = createResource(server.id, type3, type3.ResourcePrototype.'@name')
+                    if (resource == null) {
+                        log.warn("ERROR: Failed creating server.. " + type2.'@name' + "with prototype: " + type2.ResourcePrototype.'@name');
+                        failureXml = getFailureXML(ErrorCode.INVALID_PARAMETERS, 
+                           "Error creating service.. " + type3.'@name' + "with prototype: " 
+                           + type3.ResourcePrototype.'@name' + "with resource id: "
+                        )
                         return false;
                     } else { 
-                        log.warn("Created Service.. " + type3.'@name' + "with prototype: " + type3.ResourcePrototype.'@name');
+                        log.warn("INFO: created service.. " 
+                        + type3.'@name' + "with prototype: " 
+                        + type3.ResourcePrototype.'@name' 
+                        + "with resource id: " + service.id);
                     }
 
                 } //type3
