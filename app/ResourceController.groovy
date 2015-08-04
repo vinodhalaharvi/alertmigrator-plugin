@@ -1,18 +1,35 @@
+import ApiController
 import org.hyperic.hq.hqapi1.ErrorCode
 import org.hyperic.hq.appdef.shared.AppdefEntityID
 import org.hyperic.hq.appdef.shared.AppdefUtil
 import org.hyperic.hq.authz.shared.AuthzConstants
 import org.hyperic.hq.authz.shared.PermissionException
 import org.hyperic.hq.authz.shared.ResourceEdgeCreateException
-
+import org.hyperic.hq.appdef.shared.AppdefEntityValue
 import org.hyperic.hq.appdef.shared.ServiceManager
 import org.hyperic.hq.appdef.shared.ServerManager
 import org.hyperic.hq.appdef.shared.PlatformManager
 import org.hyperic.hq.authz.shared.ResourceManager
-
 import org.hyperic.hq.authz.server.session.Resource
 import org.hyperic.hq.context.Bootstrap
 import org.hyperic.hq.common.VetoException
+import org.hyperic.hq.events.shared.AlertConditionValue
+import org.hyperic.hq.events.shared.AlertDefinitionManager
+import org.hyperic.hq.events.shared.AlertDefinitionValue
+import org.hyperic.hq.events.AlertSeverity
+
+
+import org.hyperic.hq.auth.shared.SessionManager
+import org.hyperic.hq.bizapp.shared.EventsBoss;
+import org.hyperic.hq.events.EventConstants
+import org.hyperic.hq.events.shared.ActionValue
+import org.hyperic.hq.measurement.shared.ResourceLogEvent
+import org.hyperic.hq.measurement.shared.MeasurementManager;
+import org.hyperic.util.config.ConfigResponse
+import org.hyperic.hq.appdef.server.session.Platform
+import org.hyperic.hq.appdef.server.session.Server
+import org.hyperic.hq.appdef.server.session.Service
+
 
 class ResourceController extends ApiController {
 
@@ -120,6 +137,285 @@ class ResourceController extends ApiController {
             }
         }
     }
+
+
+    private Closure getAlertDefinitionXML(d, excludeIds) {
+        return getAlertDefinitionXML(d, excludeIds, false)
+    }
+
+    private Closure getAlertDefinitionXML(d, excludeIds, showAllActions) {
+        { out ->
+            def attrs = [name: d.name,
+                         description: d.description,
+                         priority: d.priority,
+                         active: d.active,
+                         enabled: d.enabled,
+                         frequency: d.frequencyType,
+                         count: d.count,
+                         range: d.range,
+                         willRecover: d.willRecover,
+                         notifyFiltered: d.notifyFiltered,
+                         controlFiltered: d.controlFiltered,
+                         ctime: d.ctime,
+                         mtime: d.mtime]
+
+            if (!excludeIds) {
+                attrs['id'] = d.id
+            }
+
+            // parent is nullable.
+            if (d.parent != null) {
+                attrs['parent'] = d.parent.id
+            }
+
+            AlertDefinition(attrs) {
+
+                if (d.resource) {
+                    if (d.parent != null && d.parent.id == 0) {
+                        ResourcePrototype(id: d.resource.id,
+                                          name: d.resource.name)
+                    } else {
+                        Resource(id : d.resource.id,
+                                 name : d.resource.name)
+                    }
+                }
+                if (d.escalation) {
+                    def e = d.escalation
+                    Escalation(id :           e.id,
+                               name :         e.name,
+                               description :  e.description,
+                               pauseAllowed : e.pauseAllowed,
+                               maxPauseTime : e.maxPauseTime,
+                               notifyAll :    e.notifyAll,
+                               repeat :       e.repeat)
+                }
+                for (c in d.conditions) {
+                    // Attributes common to all conditions
+                    def conditionAttrs = [required: c.required,
+                                          type: c.type]
+
+                    if (c.type == EventConstants.TYPE_THRESHOLD) {
+                        def metric = getTemplate(c.measurementId, d.typeBased)
+                        if (!metric) {
+                            log.warn("Unable to find metric " + c.measurementId +
+                                     "for definition " + d.name)
+                            continue
+                        } else {
+                            conditionAttrs["thresholdMetric"] = metric.name
+                            conditionAttrs["thresholdComparator"] = c.comparator
+                            conditionAttrs["thresholdValue"] = c.threshold
+                        }
+                    } else if (c.type == EventConstants.TYPE_BASELINE) {
+                        def metric = getTemplate(c.measurementId, d.typeBased)
+                        if (!metric) {
+                            log.warn("Unable to find metric " + c.measurementId +
+                                     "for definition " + d.name)
+                            continue
+                        } else {
+                            conditionAttrs["baselineMetric"] = metric.name
+                            conditionAttrs["baselineComparator"] = c.comparator
+                            conditionAttrs["baselinePercentage"] = c.threshold
+                            conditionAttrs["baselineType"] = c.optionStatus
+                        }
+                    } else if (c.type == EventConstants.TYPE_CHANGE) {
+                        def metric = getTemplate(c.measurementId, d.typeBased)
+                        if (!metric) {
+                            log.warn("Unable to find metric " + c.measurementId +
+                                     "for definition " + d.name)
+                            continue
+                        } else {
+                            conditionAttrs["metricChange"] = metric.name
+                        }
+                    } else if (c.type == EventConstants.TYPE_CUST_PROP) {
+                        conditionAttrs["property"] = c.name
+                    } else if (c.type == EventConstants.TYPE_LOG) {
+                        int level = c.name.toInteger()
+                        conditionAttrs["logLevel"] = ResourceLogEvent.getLevelString(level)
+                        conditionAttrs["logMatches"] = c.optionStatus
+                    } else if (c.type == EventConstants.TYPE_ALERT) {
+                        def alert = aMan.getByIdNoCheck(c.measurementId)
+                        if (alert == null) {
+                            // TODO: This is not handled correctly in HQ.  NPE
+                            //       is thrown rather than null returned.
+                            log.warn("Unable to find recover condition " +
+                                     c.measurementId + " for " + c.name)
+                            continue
+                        } else {
+                            if (!excludeIds) {
+                               conditionAttrs["recoverId"] = alert.id
+                            }
+                            conditionAttrs["recover"] = alert.name
+                        }
+                    } else if (c.type == EventConstants.TYPE_CFG_CHG) {
+                        conditionAttrs["configMatch"] = c.optionStatus
+                    } else if (c.type == EventConstants.TYPE_CONTROL) {
+                        conditionAttrs["controlAction"] = c.name
+                        conditionAttrs["controlStatus"] = c.optionStatus
+                    } else {
+                        log.warn("Unhandled condition type " + c.type +
+                                 " for condition " + c.name)
+                    }
+                    // Write it out
+                    AlertCondition(conditionAttrs)
+                }
+
+                for (a in d.actions) {
+                    if (a.className == "com.hyperic.hq.bizapp.server.action.control.ScriptAction" ||
+                        a.className == "org.hyperic.hq.bizapp.server.action.integrate.OpenNMSAction" ||
+                        a.className == "com.hyperic.hq.bizapp.server.action.alert.SnmpAction") {
+                        AlertAction(id: a.id,
+                                    className: a.className) {
+                            def config = ConfigResponse.decode(a.config)
+                            for (key in config.keys) {
+                                AlertActionConfig(key: key,
+                                                  value: config.getValue(key))
+                            }
+                        }
+                    } else if (a.className == "com.hyperic.hq.bizapp.server.action.control.ControlAction") {
+                        def config = ConfigResponse.decode(a.config)
+                        def appdefType = config.getValue("appdefType")?.toInteger()
+                        def appdefId = config.getValue("appdefId")?.toInteger()
+                        def resource
+
+                        if (appdefType == 1) {
+                            resource = resourceHelper.find('platform':appdefId)
+                        } else if (appdefType == 2) {
+                            resource = resourceHelper.find('server':appdefId)
+                        } else if (appdefType == 3) {
+                            resource = resourceHelper.find('service':appdefId)
+                        } else {
+                            log.warn("Unable to find resource appdefType=" +
+                                     appdefType + " appdefId=" + appdefId)
+                            continue // Skip this action
+                        }
+
+                        if (resource) {
+                            AlertAction(id: a.id,
+                                        className: a.className) {
+                                AlertActionConfig(key: 'resourceId',
+                                                  value: resource.id)
+                                AlertActionConfig(key: 'action',
+                                                  value: config.getValue('action'))
+                                AlertActionConfig(key: 'params',
+                                    value: config.getValue('params'))
+                            }
+                        }
+                    } else if (a.className == "com.hyperic.hq.bizapp.server.action.email.EmailAction") {
+                         def config = ConfigResponse.decode(a.config)
+                         def ids = config.getValue("names")
+                         def listType = config.getValue("listType")?.toInteger()
+
+                         def names = getNotificationNames(listType,ids)
+                         if (names != null && names.length() > 0) {
+                            AlertAction(id: a.id,
+                                         className: a.className) {
+                                AlertActionConfig(key: 'notifyType',
+                                                  value: EMAIL_NOTIFY_TYPE[listType])
+                                AlertActionConfig(key: 'names',
+                                                  value: names)
+                            }
+                         }
+                    } else if (showAllActions) {
+                        AlertAction(id: a.id,
+                                    className: a.className)
+                    }
+                }
+            }
+        }
+    }
+
+
+    private Closure getResourceXMLWithAlertDefinitions(user, r, boolean verbose, boolean children) {
+        { doc ->
+            def appdefRes = null
+            def isPlatform = r.isPlatform()
+            if (isPlatform) {
+                appdefRes = toPlatform(r)
+            }
+            def isServer = r.isServer()
+            if (isServer) {
+                appdefRes = toServer(r)
+            }
+            def isService = r.isService()
+            if (isService) {
+                appdefRes = toService(r)
+            }
+
+            Resource(id : r.id,
+                     name : r.name,
+                     description : appdefRes.description,
+                     location : appdefRes.location,
+                     instanceId : r.entityId.id,
+                     typeId : r.entityId.type) {
+                if (verbose) {
+                    try {
+                        def config = r.getConfig()
+                        config.each { k, v ->
+                            if (v.type.equals("configResponse")) {
+                                ResourceConfig(key: k, value: v.value)
+                            }
+                        }
+                        config.each { k, v ->
+                            if (v.type.equals("cprop")) {
+                                ResourceProperty(key: k, value: v.value)
+                            }
+                        }
+                    } catch (Throwable t) {
+                        // Invalid confi?. Bad DB entry?
+                        log.error("Exception thrown while retrieving config for Resource ID " + r.id + " probably needs to be deleted manually")
+                    }
+                }
+                if (children && !isService) {
+                    r.getViewableChildren(user).each { child ->
+                        out << getResourceXMLWithAlertDefinitions(user, child, verbose, children)
+                    }
+                }
+                try { 
+                    ResourcePrototype(instanceId: r.prototype.instanceId,
+                                      resourceTypeId: r.prototype.resourceType.id - 600,
+                                      id : r.prototype.id,
+                                      name : r.prototype.name)
+
+                    if (isPlatform) {
+                        def p = appdefRes
+                        def a = p.agent
+                        Agent(id             : a.id,
+                            address        : a.address,
+                            port           : a.port,
+                            version        : a.version,
+                            unidirectional : a.unidirectional)
+                        for (ip in p.ips) {
+                            Ip(address : ip.address,
+                               netmask : ip.netmask,
+                               mac     : ip.macAddress)
+                        }
+
+                        ResourceInfo(key: PROP_FQDN, value: p.fqdn)
+                    } else if (isServer) {
+                        def s = appdefRes
+                        ResourceInfo(key: PROP_INSTALLPATH, value: s.installPath)
+                        ResourceInfo(key: PROP_AIIDENIFIER, value: s.autoinventoryIdentifier)
+                    } else if (isService) {
+                        def s = appdefRes
+                        ResourceInfo(key: PROP_AIIDENIFIER, value: s.autoinventoryIdentifier)
+                    }
+
+                    definitions = aMan.findAlertDefinitions(user, r.entityId)
+                    for (definition in definitions.sort {a, b -> a.id <=> b.id}) {
+                        getAlertDefinitionXML(definition, false)
+                    }
+
+                } catch (Throwable t) {
+                    // Invalid confi?. Bad DB entry?
+                    log.error("Exception thrown while retrieving info for Resource ID " + r.id + " probably needs to be deleted manually")
+                }
+
+            }
+        }
+    }
+
+
+
 
     private Closure getPrototypeXML(p) {
         { doc -> 
@@ -320,85 +616,102 @@ class ResourceController extends ApiController {
         }
     }
 
-    /*def createResource1(params) {
-        def createRequest = new XmlParser().parseText(getPostData())
-        def xmlParent = createRequest['Parent']
-        def xmlResource = createRequest['Resource']
-        def xmlPrototype = createRequest['Prototype']
 
-        if (!xmlParent || xmlParent.size() != 1 ||
-            !xmlResource || xmlResource.size() != 1 ||
-            !xmlPrototype || xmlPrototype.size() != 1) {
-            renderXml() {
-                ResourceResponse() {
-                    out << getFailureXML(ErrorCode.INVALID_PARAMETERS)
+
+
+    def createDefinitionOnTargetResource(alert, targetResource) {
+
+        def eventBoss   = Bootstrap.getBean(EventsBoss.class)
+        def adValue = alert.getAlertDefinitionValue()
+
+        // Reset resource
+        adValue.setAppdefId(targetResource.instanceId)
+
+        // Clear all triggers
+        adValue.removeAllTriggers()
+
+        // Re-map measurement id's within conditions
+        for (c in adValue.conditions) {
+            c.setId(null)
+            c.setTriggerId(null)
+            if (c.type == 1 && c.measurementId > 0) {
+                def triggeringMetric = metricHelper.findMeasurementById(c.measurementId)
+                if (triggeringMetric == null) {
+                        log.info("HQAPI ERROR: Cannot find metric id " + c.measurementId +
+                                          " on " + targetResource.name)
+                        return null
+                }
+
+                def metrics = targetResource.metrics
+                def metric = metrics.find { it.template.id == triggeringMetric.template.id }
+
+                if (metric == null) {
+                    log.warn("Unable to find metric " + triggeringMetric.template.name + " on " +
+                             targetResource.name + ", syncing plugin metrics")
+
+                    // This indicates a mismatch between the resource metrics
+                    // and the metrics defined by the plugin. Normally we'd call
+                    // measMan.syncPluginMetrics, but that appears to be broken.
+                    def measMan = Bootstrap.getBean(MeasurementManager.class)
+                    def configMan = Bootstrap.getBean(ConfigManager.class)
+
+                    AppdefEntityValue av = new AppdefEntityValue(targetResource.entityId, user);
+                    def configResponse = configMan.getMergedConfigResponse(user, ProductPlugin.TYPE_MEASUREMENT,
+                                                                         targetResource.entityId, false)
+                    measMan.createDefaultMeasurements(user, targetResource.entityId, av.getMonitorableType(), configResponse)
+
+                    // Reload
+                    metrics = targetResource.metrics
+                    metric = metrics.find { it.template.id == triggeringMetric.template.id }
+
+                    if (metric == null) {
+                            log.info("HQAPI ERROR: Unable to find metric " + triggeringMetric.template.name +
+                                                  " on " + targetResource.name); 
+                            return null
+                    }
+                }
+
+                log.info("Mapping metric " + c.measurementId + " to " + metric.id)
+
+                if (!metric.enabled) {
+                    log.info("Enabling metric " + metric.template.name + " on " + targetResource.name)
+                            metric.enableMeasurement(user, metric.template.defaultInterval)
+                }
+
+                c.setMeasurementId(metric.id)
+            } else if (c.type == 5 && c.measurementId > 0) {
+                def recoverAlert = alertHelper.getById(c.measurementId)
+                if (recoverAlert == null) {
+                        log.info( "HQAPI ERROR: Unable to find recovery alert id " + c.measurementId)
+                        return null
+                }
+
+                def oldRecovery = c.measurementId
+                def existingAlerts = targetResource.getAlertDefinitions(user)
+                for (existingAlert in existingAlerts) {
+                    if (existingAlert.name.equals(recoverAlert.name)) {
+                        log.info("Mapping recovery alert " + recoverAlert.name + " from id " +
+                                 c.measurementId + " to " + existingAlert.id)
+                        c.setMeasurementId(existingAlert.id)
+                    }
+                }
+                if (c.measurementId == oldRecovery) {
+                       log.info("HQAPI ERROR: Failed to copy alert definition " +
+                                          alert.name + ", recovery alert " +
+                                          recoverAlert + " not found")
+                      return null
                 }
             }
-            return
         }
 
-        def parent = getResource(xmlParent[0].'@id'.toInteger())
-        def prototype = resourceHelper.find(prototype: xmlPrototype[0].'@name')
+        log.info("Creating definition " + alert.name + " on " + targetResource.name)
+        def sessionId = SessionManager.instance.put(user)
+        def result = eventBoss.createAlertDefinition(sessionId, adValue)
+        log.info("Created alert id = " + result.id)
 
-        if (!parent) {
-            renderXml() {
-                ResourceResponse() {
-                    out << getFailureXML(ErrorCode.OBJECT_NOT_FOUND,
-                                         "Parent resource " +
-                                         xmlParent[0].'@id' +
-                                         " not found")
-                }
-            }
-            return
-        }
-
-        if (!prototype) {
-            renderXml() {
-                ResourceResponse() {
-                    out << getFailureXML(ErrorCode.OBJECT_NOT_FOUND,
-                                         "Resource type " +
-                                         xmlPrototype[0].'@name' +
-                                         " not found")
-                }
-            }
-            return
-        }
-
-        def resourceXml = xmlResource[0]
-        def cfgXml = resourceXml['ResourceConfig']
-        def cfg = [:]
-        cfgXml.each { c ->
-            cfg.put(c.'@key', c.'@value')
-        }
-
-        def resource
-        try {
-            resource = prototype.createInstance(parent, resourceXml.'@name',
-                                                user, cfg)
-        } catch (Throwable t) {
-            String cause = getCause(t)
-            renderXml() {
-                ResourceResponse() {
-                    out << getFailureXML(ErrorCode.INVALID_PARAMETERS,
-                                         "Error creating '" +
-                                         resourceXml.'@name' + "': " +
-                                         cause);
-                }
-            }
-            log.warn("Error creating resource", t)
-            return
-        }
-        
-        renderXml() {
-            ResourceResponse() {
-                out << getSuccessXML()
-                // Only return this resource w/ it's config
-                out << getResourceXML(user, resource, true, false)
-            }
-        }
-    }*/
-
-
+        def message = "Created alert definition '" + alert.name + "' on " + targetResource.name;
+        return result
+    }
 
 
 
@@ -452,6 +765,8 @@ class ResourceController extends ApiController {
         try {
             resource = prototype.createInstance(parent, resourceXml.'@name',
                                                 user, cfg)
+
+        // Must loop waiting for metrics to be created in the background.
         } catch (Throwable t) {
             String cause = getCause(t)
             renderXml() {
@@ -480,6 +795,15 @@ class ResourceController extends ApiController {
 
         createRequest.Resource.each{
             type1 ->
+            /*type1.AlertDefinition.each{ alert ->
+                def res = createDefinitionOnTargetResource(alert, type1.'@copyToId'?.toInteger())
+                if (res == null) { 
+                    out << getFailureXML( "Some alertdefinitions have not been copied " + 
+                    "successfully. Please login to GUI and check results manually") 
+                } else { 
+                    out << getSuccessXML()
+                }
+            }*/
 
             type1.Resource.each {
                 type2 ->
@@ -516,6 +840,17 @@ class ResourceController extends ApiController {
                         + type3.'@name' + "with prototype: " 
                         + type3.ResourcePrototype.'@name' 
                         + "with resource id: " + service.id);
+
+                        /*log.warn("HQAPI INFO: creating alerts for resource: " + service.name)
+                        type3.AlertDefinition.each{ alert ->
+                            def res = createDefinitionOnTargetResource(alert, service)
+                            if (res == null) { 
+                                out << getFailureXML( "Some alertdefinitions have not been copied " + 
+                                "successfully. Please login to GUI and check results manually") 
+                            } else { 
+                                out << getSuccessXML()
+                            }
+                        }*/
                     }
 
                 } //type3
@@ -620,6 +955,95 @@ class ResourceController extends ApiController {
                 } else {
                     out << getSuccessXML()
                     out << getResourceXML(user, resource, verbose, children)
+                }
+            }
+        }
+    }
+
+
+    def getResourcesWithAlertDefinitions(params) {
+        def id = params.getOne("id")?.toInteger()
+        def platformName = params.getOne("platformName")
+        def fqdn = params.getOne("fqdn")
+        def parentOf = params.getOne("parentOf")?.toInteger()
+        def platformId = params.getOne("platformId")?.toInteger()
+        def aeid = params.getOne("aeid")?.toString()
+        boolean children = params.getOne("children", "false").toBoolean()
+        boolean verbose = params.getOne("verbose", "false").toBoolean()
+
+        def resource = null
+        def failureXml
+        if (!id && !platformName && !fqdn && !platformId && !parentOf && !aeid) {
+            failureXml = getFailureXML(ErrorCode.INVALID_PARAMETERS)
+        } else {
+            try {
+                if (id) {
+                    resource = getResource(id)
+                    if (!resource) {
+                        failureXml = getFailureXML(ErrorCode.OBJECT_NOT_FOUND,
+                                "Resource id=" + id +
+                                        " not found")
+                    }
+                } else if (aeid) {
+                    def appdefeid = new AppdefEntityID(aeid)
+                    resource = resMan.findResource(appdefeid)
+                    
+                    if (!resource) {
+                        failureXml = getFailureXML(ErrorCode.OBJECT_NOT_FOUND,
+                                "Resource aeid=" + aeid +
+                                        " not found")
+                    }
+                } else if (platformId) {
+                    def wantedResource = getResource(platformId)
+                    if (!wantedResource) {
+                        failureXml = getFailureXML(ErrorCode.OBJECT_NOT_FOUND,
+                                "Resource id=" + platformId +
+                                        " not found")
+                    } else {
+                        resource = wantedResource.platform
+                    }
+                } else if (platformName) {
+                    resource = resourceHelper.find('platform': platformName)
+                    if (!resource) {
+                        failureXml = getFailureXML(ErrorCode.OBJECT_NOT_FOUND,
+                                "Platform '" + platformName +
+                                        "' not found")
+                    }
+                } else if (fqdn) {
+                	resource = resourceHelper.find('byFqdn':fqdn)
+                    if (!resource) {
+                        failureXml = getFailureXML(ErrorCode.OBJECT_NOT_FOUND,
+                                               "Platform fqdn='" + fqdn +
+                                               "' not found")
+                    }
+                } else if (parentOf) {
+                    def child = getResource(parentOf)
+                    if (!child) {
+                        failureXml = getFailureXML(ErrorCode.OBJECT_NOT_FOUND,
+                                               "Resource id ='" + parentOf +
+                                               "' not found")
+                    } else {
+                        if (child.isPlatform()) {
+                            failureXml = getFailureXML(ErrorCode.OBJECT_NOT_FOUND,
+                                                       "No parent for platform ='" + parentOf + "'")
+                        } else if (child.isServer()) {
+                            resource = child.toServer().platform.resource
+                        } else if (child.isService()) {
+                            resource = child.toService().server.resource
+                        }
+                    }                }
+            } catch (PermissionException e) {
+                failureXml = getFailureXML(ErrorCode.PERMISSION_DENIED)
+            }
+        }
+
+        renderXml() {
+            out << ResourceResponse() {
+                if (failureXml) {
+                    out << failureXml
+                } else {
+                    out << getSuccessXML()
+                    out << getResourceXMLWithAlertDefinitions(user, resource, verbose, children)
                 }
             }
         }

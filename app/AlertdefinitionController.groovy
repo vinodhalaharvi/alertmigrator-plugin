@@ -284,6 +284,7 @@ public class AlertdefinitionController extends ApiController {
         }
     }
 
+
     def get(params) {
         def id = params.getOne("id")?.toInteger()
 
@@ -322,6 +323,9 @@ public class AlertdefinitionController extends ApiController {
             }
         }
     }
+
+
+
 
     def listDefinitionsByResources(params) {
         def failureXml = null
