@@ -42,7 +42,8 @@ class ResourceController extends ApiController {
     private static svrMan = Bootstrap.getBean(ServerManager.class)
     private static svcMan = Bootstrap.getBean(ServiceManager.class)
     private static resMan = Bootstrap.getBean(ResourceManager.class)
-    
+    private aMan = Bootstrap.getBean(AlertDefinitionManager.class)
+
     private toPlatform(Resource r) {
         platMan.findPlatformById(r.instanceId)
     }
@@ -370,7 +371,7 @@ class ResourceController extends ApiController {
                         out << getResourceXMLWithAlertDefinitions(user, child, verbose, children)
                     }
                 }
-                try { 
+                //try { 
                     ResourcePrototype(instanceId: r.prototype.instanceId,
                                       resourceTypeId: r.prototype.resourceType.id - 600,
                                       id : r.prototype.id,
@@ -400,15 +401,19 @@ class ResourceController extends ApiController {
                         ResourceInfo(key: PROP_AIIDENIFIER, value: s.autoinventoryIdentifier)
                     }
 
-                    definitions = aMan.findAlertDefinitions(user, r.entityId)
+                    //definitions = aMan.findAlertDefinitions(user, r.entityId)
+                    def definitions = aMan.findAlertDefinitions(user, r)
                     for (definition in definitions.sort {a, b -> a.id <=> b.id}) {
-                        getAlertDefinitionXML(definition, false)
+                        def alertDefinitionXML = getAlertDefinitionXML(definition, false)
+                        out << alertDefinitionXML
+                        //log.info(alertDefinitionXML)
                     }
-
-                } catch (Throwable t) {
+                //} 
+                /*catch (Throwable t) {
+                    throw e
                     // Invalid confi?. Bad DB entry?
                     log.error("Exception thrown while retrieving info for Resource ID " + r.id + " probably needs to be deleted manually")
-                }
+                }*/
 
             }
         }
