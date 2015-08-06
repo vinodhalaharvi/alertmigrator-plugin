@@ -17,7 +17,7 @@ import org.hyperic.hq.events.shared.AlertConditionValue
 import org.hyperic.hq.events.shared.AlertDefinitionManager
 import org.hyperic.hq.events.shared.AlertDefinitionValue
 import org.hyperic.hq.events.AlertSeverity
-
+import org.hyperic.hq.appdef.shared.AppdefEntityTypeID
 
 import org.hyperic.hq.auth.shared.SessionManager
 import org.hyperic.hq.bizapp.shared.EventsBoss;
@@ -43,6 +43,10 @@ class ResourceController extends ApiController {
     private static svcMan = Bootstrap.getBean(ServiceManager.class)
     private static resMan = Bootstrap.getBean(ResourceManager.class)
     private aMan = Bootstrap.getBean(AlertDefinitionManager.class)
+    private eventBoss   = Bootstrap.getBean(EventsBoss.class)
+
+    private EMAIL_NOTIFY_TYPE = [1:"email", 2:"users", 3:"roles"]
+
 
     private toPlatform(Resource r) {
         platMan.findPlatformById(r.instanceId)
@@ -54,6 +58,18 @@ class ResourceController extends ApiController {
 
     private toService(Resource r) {
         svcMan.findServiceById(r.instanceId)
+    }
+
+
+    private checkRequiredAttributes(name, xml, attrs) {
+        for (attr in attrs) {
+            if (xml."@${attr}" == null) {
+                return getFailureXML(ErrorCode.INVALID_PARAMETERS,
+                                     "Required attribute '" + attr +
+                                     "' not given for " + name)
+            }
+        }
+        return null
     }
 
     private Closure getResourceXML(user, r, boolean verbose, boolean children) {
@@ -622,107 +638,511 @@ class ResourceController extends ApiController {
     }
 
 
+    def createAlertDefinition(xmlDef, rid) {
+        def out = ""
+        def definitions = []
+        def sess = org.hyperic.hq.hibernate.SessionManager.currentSession()
+        //for (xmlDef in syncRequest['AlertDefinition']) {
+        def failureXml = null
+        def resource = null 
+        boolean typeBased
+        def existing = null
+        Integer id = xmlDef.'@id'?.toInteger()
+        resource = getResource(rid)
+        if (!resource) { 
+            failureXml = getFailureXML(ErrorCode.OBJECT_NOT_FOUND,
+                    "Resource id=" + rid +
+                            " not found")
+            return
+        }
 
-
-    def createDefinitionOnTargetResource(alert, targetResource) {
-
-        def eventBoss   = Bootstrap.getBean(EventsBoss.class)
-        def adValue = alert.getAlertDefinitionValue()
-
-        // Reset resource
-        adValue.setAppdefId(targetResource.instanceId)
-
-        // Clear all triggers
-        adValue.removeAllTriggers()
-
-        // Re-map measurement id's within conditions
-        for (c in adValue.conditions) {
-            c.setId(null)
-            c.setTriggerId(null)
-            if (c.type == 1 && c.measurementId > 0) {
-                def triggeringMetric = metricHelper.findMeasurementById(c.measurementId)
-                if (triggeringMetric == null) {
-                        log.info("HQAPI ERROR: Cannot find metric id " + c.measurementId +
-                                          " on " + targetResource.name)
-                        return null
-                }
-
-                def metrics = targetResource.metrics
-                def metric = metrics.find { it.template.id == triggeringMetric.template.id }
-
-                if (metric == null) {
-                    log.warn("Unable to find metric " + triggeringMetric.template.name + " on " +
-                             targetResource.name + ", syncing plugin metrics")
-
-                    // This indicates a mismatch between the resource metrics
-                    // and the metrics defined by the plugin. Normally we'd call
-                    // measMan.syncPluginMetrics, but that appears to be broken.
-                    def measMan = Bootstrap.getBean(MeasurementManager.class)
-                    def configMan = Bootstrap.getBean(ConfigManager.class)
-
-                    AppdefEntityValue av = new AppdefEntityValue(targetResource.entityId, user);
-                    def configResponse = configMan.getMergedConfigResponse(user, ProductPlugin.TYPE_MEASUREMENT,
-                                                                         targetResource.entityId, false)
-                    measMan.createDefaultMeasurements(user, targetResource.entityId, av.getMonitorableType(), configResponse)
-
-                    // Reload
-                    metrics = targetResource.metrics
-                    metric = metrics.find { it.template.id == triggeringMetric.template.id }
-
-                    if (metric == null) {
-                            log.info("HQAPI ERROR: Unable to find metric " + triggeringMetric.template.name +
-                                                  " on " + targetResource.name); 
-                            return null
-                    }
-                }
-
-                log.info("Mapping metric " + c.measurementId + " to " + metric.id)
-
-                if (!metric.enabled) {
-                    log.info("Enabling metric " + metric.template.name + " on " + targetResource.name)
-                            metric.enableMeasurement(user, metric.template.defaultInterval)
-                }
-
-                c.setMeasurementId(metric.id)
-            } else if (c.type == 5 && c.measurementId > 0) {
-                def recoverAlert = alertHelper.getById(c.measurementId)
-                if (recoverAlert == null) {
-                        log.info( "HQAPI ERROR: Unable to find recovery alert id " + c.measurementId)
-                        return null
-                }
-
-                def oldRecovery = c.measurementId
-                def existingAlerts = targetResource.getAlertDefinitions(user)
-                for (existingAlert in existingAlerts) {
-                    if (existingAlert.name.equals(recoverAlert.name)) {
-                        log.info("Mapping recovery alert " + recoverAlert.name + " from id " +
-                                 c.measurementId + " to " + existingAlert.id)
-                        c.setMeasurementId(existingAlert.id)
-                    }
-                }
-                if (c.measurementId == oldRecovery) {
-                       log.info("HQAPI ERROR: Failed to copy alert definition " +
-                                          alert.name + ", recovery alert " +
-                                          recoverAlert + " not found")
-                      return null
-                }
+        // Required attributes, basically everything but description
+        ['controlFiltered', 'notifyFiltered', 'willRecover', 'range', 'count',
+         'frequency', 'active', 'priority',
+         'name'].each { attr ->
+            if (xmlDef."@${attr}" == null) {
+                failureXml = getFailureXML(ErrorCode.INVALID_PARAMETERS,
+                                          "Required attribute " + attr +
+                                          " not found for definition " +
+                                          xmlDef.'@name')
             }
         }
 
-        log.info("Creating definition " + alert.name + " on " + targetResource.name)
-        def sessionId = SessionManager.instance.put(user)
-        def result = eventBoss.createAlertDefinition(sessionId, adValue)
-        log.info("Created alert id = " + result.id)
+        // At least one condition is always required
+        if (!xmlDef['AlertCondition'] || xmlDef['AlertCondition'].size() < 1) {
+            failureXml = getFailureXML(ErrorCode.INVALID_PARAMETERS,
+                                       "At least 1 AlertCondition is " +
+                                       "required for definition " +
+                                       xmlDef.'@name')
+        }
 
-        def message = "Created alert definition '" + alert.name + "' on " + targetResource.name;
-        return result
+        // Configure any escalations
+        def escalation = null
+        if (xmlDef['Escalation'].size() == 1) {
+
+            def xmlEscalation = xmlDef['Escalation'][0]
+            def escName = xmlEscalation.'@name'
+            if (escName) {
+                escalation = escalationHelper.getEscalation(null, escName)
+            }
+
+            if (!escalation) {
+                failureXml = getFailureXML(ErrorCode.OBJECT_NOT_FOUND,
+                                           "Unable to find escalation with " +
+                                           "name '" + escName + "'")
+            }
+        }
+
+        // Alert priority must be 1-3
+        int priority = xmlDef.'@priority'.toInteger()
+        if (priority < 1 || priority > 3) {
+            failureXml = getFailureXML(ErrorCode.INVALID_PARAMETERS,
+                                       "AlertDefinition priority must be " +
+                                       "between 1 (low) and 3 (high) " +
+                                       "found=" + priority)
+        }
+
+        // Alert frequency must be 0-4
+        int frequency = xmlDef.'@frequency'.toInteger()
+        if (frequency < 0 || frequency > 4) {
+            failureXml = getFailureXML(ErrorCode.INVALID_PARAMETERS,
+                                       "AlertDefinition frequency must be " +
+                                       "between 0 and 4 " +
+                                       "found=" + frequency)
+        }
+
+        // Error with AlertDefinition attributes
+        if (failureXml) {
+            renderXml() {
+                AlertDefinitionsResponse() {
+                    out << failureXml
+                }
+            }
+            return
+        }
+
+        def aeid;
+        if (typeBased) {
+            aeid = new AppdefEntityTypeID(resource.appdefType,
+                                          resource.instanceId)
+        } else {
+            aeid = resource.entityId
+        }
+
+        AlertDefinitionValue adv = new AlertDefinitionValue();
+        adv.id          = existing?.id
+        adv.name        = xmlDef.'@name'
+        adv.description = xmlDef.'@description'
+        adv.appdefType  = aeid.type
+        adv.appdefId    = aeid.id
+        adv.priority    = xmlDef.'@priority'?.toInteger()
+        adv.active      = xmlDef.'@active'.toBoolean()
+        adv.willRecover = xmlDef.'@willRecover'.toBoolean()
+        adv.notifyFiltered = xmlDef.'@notifyFiltered'?.toBoolean()
+        adv.controlFiltered = xmlDef.'@controlFiltered'?.toBoolean()
+        adv.frequencyType  = xmlDef.'@frequency'.toInteger()
+        adv.count = xmlDef.'@count'.toLong()
+        adv.range = xmlDef.'@range'.toLong()
+        adv.escalationId = escalation?.id
+        if (existing) {
+            // If the alert is pre-existing, set the parent id.
+            adv.parentId = existing.parent?.id
+        }
+
+        def templs
+        if (typeBased) {
+            def args = [:]
+            args.all = 'templates'
+            args.resourceType = resource.name
+            templs = metricHelper.find(args)
+        } else {
+            // TODO: This gets all metrics, should warn if that metric is disabled?
+            templs = resource.metrics
+        }
+
+        def isRecovery = false
+
+        for (xmlAction in xmlDef['AlertAction']) {
+            def actionId  = xmlAction.'@id'?.toInteger()
+            def className = xmlAction.'@className'
+
+            if (!className) {
+                // Nothing to do
+                continue
+            }
+
+            def cfg = [:]
+            // Special translation for ControlActions for Resource ids
+            if (className == "com.hyperic.hq.bizapp.server.action.control.ControlAction") {
+                def rId = xmlAction['AlertActionConfig'].find {
+                    it.'@key' == 'resourceId'
+                }?.'@value'?.toInteger()
+
+                def action = xmlAction['AlertActionConfig'].find {
+                    it.'@key' == 'action'
+                }?.'@value'
+
+                def par = xmlAction['AlertActionConfig'].find {
+                    it.'@key' == 'params'
+                }?.'@value'
+
+        
+                def cResource = null
+                try {
+                    cResource = getResource(rId)
+                } catch (PermissionException e) {
+                    // Ignore
+                }
+                if (cResource != null && action != null) {
+                    def actions = cResource.getControlActions(user)
+                    if (!actions.find { it == action }) {
+                        log.warn("Resource " + cResource.name + " does not " +
+                                 "support action " + action)
+                        continue
+                    }
+
+                    cfg['appdefType'] = Integer.toString(cResource.entityId.type)
+                    cfg['appdefId'] = Integer.toString(cResource.entityId.id)
+                    cfg['action'] = action
+                    cfg['params'] = par
+                } else {
+                    // If the resource is not found, don't add the action
+                    log.warn("Ignoring invalid ControlAction config " +
+                             xmlAction['AlertActionConfig'])
+                    continue
+                }
+            } else if (className == "com.hyperic.hq.bizapp.server.action.email.EmailAction") {
+                def typeName = xmlAction['AlertActionConfig'].find {
+                    it.'@key' == 'notifyType'
+                }?.'@value'
+
+                def names = xmlAction['AlertActionConfig'].find {
+                    it.'@key' == 'names'
+                }?.'@value'
+
+                def type = EMAIL_NOTIFY_TYPE.find { it.value == typeName }?.key
+
+                if (!type) {
+                    log.warn("Ignoring invalid EmailAction type " + typeName)
+                    continue
+                }
+
+                def notificationIds = getNotificationIds(type, names)
+                if (notificationIds == null || notificationIds.length() == 0) {
+                    log.warn("Ignoring invalid EmailAction notification=" + names)
+                    continue
+                }
+
+                cfg['listType'] = type.toString()
+                cfg['names'] = notificationIds
+                cfg['sms'] = 'false' // XXX: Legacy a presume..
+            } else {
+                for (xmlConfig in xmlAction['AlertActionConfig']) {
+                    cfg[xmlConfig.'@key'] = xmlConfig.'@value'
+                }
+            }
+
+            ConfigResponse configResponse =  new ConfigResponse(cfg)
+            ActionValue action = new ActionValue(actionId, className,
+                                                 configResponse.encode(),
+                                                 null)
+            adv.addAction(action)
+        }
+
+        for (xmlCond in xmlDef['AlertCondition']) {
+            AlertConditionValue acv = new AlertConditionValue()
+            def acError
+
+            acError = checkRequiredAttributes(adv.name, xmlCond,
+                                              ['required','type'])
+            if (acError != null) {
+                failureXml = acError
+                break
+            }
+
+            acv.required = xmlCond.'@required'.toBoolean()
+            acv.type = xmlCond.'@type'.toInteger()
+
+            switch (acv.type) {
+                case EventConstants.TYPE_THRESHOLD:
+                    acError = checkRequiredAttributes(adv.name, xmlCond,
+                                                      ['thresholdMetric',
+                                                       'thresholdComparator',
+                                                       'thresholdValue'])
+                    if (acError != null) {
+                        failureXml = acError
+                        break
+                    }
+
+                    acv.name = xmlCond.'@thresholdMetric'
+                    def template = templs.find {
+                        acv.name == (typeBased ? it.name : it.template.name)
+                    }
+                    if (!template) {
+                        failureXml = getFailureXML(ErrorCode.OBJECT_NOT_FOUND,
+                                                   "Unable to find metric " +
+                                                   acv.name + " for " +
+                                                   resource.name)
+                        break
+                    }
+
+                    acv.measurementId = template.id
+                    acv.comparator    = xmlCond.'@thresholdComparator'
+                    acv.threshold     = Double.valueOf(xmlCond.'@thresholdValue')
+                    break
+                case EventConstants.TYPE_BASELINE:
+                    acError = checkRequiredAttributes(adv.name, xmlCond,
+                                                      ['baselineMetric',
+                                                       'baselineComparator',
+                                                       'baselinePercentage',
+                                                       'baselineType'])
+                    if (acError != null) {
+                        failureXml = acError
+                        break
+                    }
+
+                    acv.name = xmlCond.'@baselineMetric'
+                    def template = templs.find {
+                        acv.name == (typeBased ? it.name : it.template.name)
+                    }
+                    if (!template) {
+                        failureXml = getFailureXML(ErrorCode.OBJECT_NOT_FOUND,
+                                                   "Unable to find metric " +
+                                                   acv.name + " for " +
+                                                   resource.name)
+                        break
+                    }
+
+                    def baselineType = xmlCond.'@baselineType'
+                    if (!baselineType.equals("min") &&
+                        !baselineType.equals("max")&&
+                        !baselineType.equals("mean")) {
+                        failureXml = getFailureXML(ErrorCode.INVALID_PARAMETERS,
+                                                   "Invalid baseline type '" +
+                                                   baselineType + "'")
+                        break
+                    }
+
+
+                    acv.measurementId = template.id
+                    acv.comparator    = xmlCond.'@baselineComparator'
+                    acv.threshold     = Double.valueOf(xmlCond.'@baselinePercentage')
+                    acv.option        = baselineType
+                    break
+                case EventConstants.TYPE_CONTROL:
+                    acError = checkRequiredAttributes(adv.name, xmlCond,
+                                                      ['controlAction',
+                                                       'controlStatus'])
+                    if (acError != null) {
+                        failureXml = acError
+                        break
+                    }
+
+                    def controlStatus = xmlCond.'@controlStatus'
+                    if (!controlStatus.equals("Completed") &&
+                        !controlStatus.equals("In Progress") &&
+                        !controlStatus.equals("Failed")) {
+                        failureXml = getFailureXML(ErrorCode.INVALID_PARAMETERS,
+                                                   "Invalid control condition " +
+                                                   "status " + controlStatus)
+                        break
+                    }
+
+                    // TODO: Check resource for given control action
+                    acv.name   = xmlCond.'@controlAction'
+                    acv.option = controlStatus
+                    break
+                case EventConstants.TYPE_CHANGE:
+                    acError = checkRequiredAttributes(adv.name, xmlCond,
+                                                      ['metricChange'])
+                    if (acError != null) {
+                        failureXml = acError
+                        break
+                    }
+
+                    acv.name = xmlCond.'@metricChange'
+                    def template = templs.find {
+                        acv.name == (typeBased ? it.name : it.template.name)
+                    }
+                    if (!template) {
+                        failureXml = getFailureXML(ErrorCode.OBJECT_NOT_FOUND,
+                                                   "Unable to find metric " +
+                                                   acv.name + " for " +
+                                                   resource.name)
+                        break
+                    }
+                    acv.measurementId = template.id
+                    break
+                case EventConstants.TYPE_ALERT:
+                    acError = checkRequiredAttributes(adv.name, xmlCond,
+                                                      ['recover'])
+                    if (acError != null) {
+                        failureXml = acError
+                        break
+                    }
+
+                    isRecovery = true
+
+                    // If a resource alert, look up alert by name
+                    // TODO: This needs to be looked up by alert definition id
+                    // to avoid collisions where the alert definition names
+                    // are the same
+                    if (resource) {
+                        log.debug("Looking up alerts for resource=" + resource.id)
+                        def resourceDefs = resource.getAlertDefinitions(user)
+                        def recovery = resourceDefs.find { it.name == xmlCond.'@recover' }
+                        if (recovery) {
+                            log.info("Found recovery definition " + recovery.id)
+                            acv.measurementId = recovery.id
+                            break
+                        }
+                    }
+
+                    if (!acv.measurementId) {
+                        failureXml = getFailureXML(ErrorCode.OBJECT_NOT_FOUND,
+                                                   "Unable to find recovery " +
+                                                   "with name '" +
+                                                   xmlCond.'@recover' + "'")
+                    }
+
+                    break
+                case EventConstants.TYPE_CUST_PROP:
+                    acError = checkRequiredAttributes(adv.name, xmlCond,
+                                                      ['property'])
+                    if (acError != null) {
+                        failureXml = acError
+                        break
+                    }
+                    acv.name = xmlCond.'@property'
+                    break
+                case EventConstants.TYPE_LOG:
+                    acError = checkRequiredAttributes(adv.name, xmlCond,
+                                                      ['logLevel',
+                                                       'logMatches'])
+                    if (acError != null) {
+                        failureXml = acError
+                        break
+                    }
+
+
+                    def level = EVENT_LEVEL_TO_NUM[xmlCond.'@logLevel']
+                    if (level == null) {
+                        failureXml = getFailureXML(ErrorCode.INVALID_PARAMETERS,
+                                                   "Unknown log level " +
+                                                   xmlCond.'@logLevel')
+                        break
+                    }
+
+                    acv.name = level.toString()
+                    acv.option = xmlCond.'@logMatches'
+                    break
+                case EventConstants.TYPE_CFG_CHG:
+
+                    def configMatch = xmlCond.'@configMatch'
+                    if (configMatch) {
+                        acv.option = configMatch
+                    }
+                    break
+                default:
+                    failureXml = getFailureXML(ErrorCode.INVALID_PARAMETERS,
+                                               "Unhandled AlertCondition " +
+                                               "type " + acv.type + " for " +
+                                               adv.name)
+            }
+
+            // Error with AlertCondition
+            if (failureXml) {
+                renderXml() {
+                    AlertDefinitionsResponse() {
+                        out << failureXml
+                    }
+                }
+                return
+            }
+            adv.addCondition(acv)
+        }
+
+        // TODO: Migrate this to AlertHelper
+        try {
+            def sessionId = SessionManager.instance.put(user)
+            if (adv.id == null) {
+                def newDef
+                if (typeBased) {
+                    newDef =
+                        eventBoss.createResourceTypeAlertDefinition(sessionId,
+                                                                    aeid, adv)
+                } else {
+                    newDef = eventBoss.createAlertDefinition(sessionId, adv)
+                }
+                adv.id = newDef.id
+            } else {
+                if (typeBased
+                        && (!adv.name.equals(existing.name)
+                            || !adv.description.equals(existing.description)
+                            || adv.priority != existing.priority
+                            || adv.active != existing.active)) {
+                    
+                    eventBoss.updateAlertDefinitionBasic(sessionId, adv.id,
+                                                         adv.name, adv.description,
+                                                         adv.priority, adv.active)
+                }
+                eventBoss.updateAlertDefinition(sessionId, adv)
+            }
+        } catch (PermissionException e) {
+            failureXml = getFailureXML(ErrorCode.PERMISSION_DENIED)
+        } catch (Exception e) {
+            log.error("Error updating alert definition", e)
+            failureXml = getFailureXML(ErrorCode.UNEXPECTED_ERROR,
+                                       e.getMessage())
+        }
+
+        // Error with save/update
+        if (failureXml) {
+            renderXml() {
+                AlertDefinitionsResponse() {
+                    out << failureXml
+                }
+            }
+            return
+        }
+
+        def pojo = aMan.getByIdNoCheck(adv.id)
+
+        // Deal with Escalations
+        if (escalation) {
+            // TODO: Backend should handle escalations on recovery alerts
+            if (isRecovery) {
+                log.warn("Skipping escalation for definition '" + pojo.name +
+                         "'.  Escalations not allowed for recovery alerts.")
+            } else {
+                pojo.setEscalation(user, escalation)
+            }
+        } else {
+            pojo.unsetEscalation(user)
+        }
+
+        // Keep synced definitions for sync return XML
+        definitions << pojo.id
+        sess.flush()
+        sess.clear()
+        //}
+
+        //renderXml() {
+        /*out << AlertDefinitionsResponse() {
+            out << getSuccessXML()
+            for (alertdefid in definitions) {
+                out << getAlertDefinitionXML(aMan.getByIdNoCheck(alertdefid), false)
+            }
+        }*/
+        //}
     }
 
 
 
 
-    def createResource(parentId, xmlResource, prototypeName) {
 
+
+    def createResource(parentId, xmlResource, prototypeName) {
         if (!xmlResource) {
             renderXml() {
                 ResourceResponse() {
@@ -791,8 +1211,8 @@ class ResourceController extends ApiController {
 
 
 
-
     def create(params) {
+        def out = ""
         def failureXml = null
         def createRequest = new XmlParser().parseText(getPostData())
         //pp = new XmlNodePrinter(new PrintWriter(new StringWriter()), "  ")
@@ -800,15 +1220,18 @@ class ResourceController extends ApiController {
 
         createRequest.Resource.each{
             type1 ->
-            /*type1.AlertDefinition.each{ alert ->
-                def res = createDefinitionOnTargetResource(alert, type1.'@copyToId'?.toInteger())
+
+            type1.AlertDefinition.each{ alert ->
+                log.warn("HQAPI INFO: creating alert " + alert.'@name' + " for resource with id " + type1.'@copyToId')
+                def res = createAlertDefinition(alert, type1.'@copyToId'?.toInteger())
                 if (res == null) { 
-                    out << getFailureXML( "Some alertdefinitions have not been copied " + 
+                    out << getFailureXML(ErrorCode.INVALID_PARAMETERS, "HQAPI WARN: Some alertdefinitions have not been copied " + 
                     "successfully. Please login to GUI and check results manually") 
                 } else { 
                     out << getSuccessXML()
                 }
-            }*/
+            }
+            return 
 
             type1.Resource.each {
                 type2 ->
@@ -846,16 +1269,16 @@ class ResourceController extends ApiController {
                         + type3.ResourcePrototype.'@name' 
                         + "with resource id: " + service.id);
 
-                        /*log.warn("HQAPI INFO: creating alerts for resource: " + service.name)
-                        type3.AlertDefinition.each{ alert ->
-                            def res = createDefinitionOnTargetResource(alert, service)
+                        log.warn("HQAPI INFO: creating alerts for resource: " + service.name + " with resource id : " + serivce.id)
+                        type3.AlertDefinition?.each{ alert ->
+                            def res = createAlertDefinition(alert, service)
                             if (res == null) { 
                                 out << getFailureXML( "Some alertdefinitions have not been copied " + 
                                 "successfully. Please login to GUI and check results manually") 
                             } else { 
                                 out << getSuccessXML()
                             }
-                        }*/
+                        }
                     }
 
                 } //type3
