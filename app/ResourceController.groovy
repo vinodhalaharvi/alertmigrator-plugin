@@ -19,6 +19,7 @@ import org.hyperic.hq.events.shared.AlertDefinitionValue
 import org.hyperic.hq.events.AlertSeverity
 import org.hyperic.hq.appdef.shared.AppdefEntityTypeID
 
+//AlertDefinitionContoller class imports
 import org.hyperic.hq.auth.shared.SessionManager
 import org.hyperic.hq.bizapp.shared.EventsBoss;
 import org.hyperic.hq.events.EventConstants
@@ -44,6 +45,7 @@ class ResourceController extends ApiController {
     private static resMan = Bootstrap.getBean(ResourceManager.class)
     private aMan = Bootstrap.getBean(AlertDefinitionManager.class)
     private eventBoss   = Bootstrap.getBean(EventsBoss.class)
+    private mMan        = Bootstrap.getBean(MeasurementManager.class)
 
     private EMAIL_NOTIFY_TYPE = [1:"email", 2:"users", 3:"roles"]
 
@@ -58,6 +60,27 @@ class ResourceController extends ApiController {
 
     private toService(Resource r) {
         svcMan.findServiceById(r.instanceId)
+    }
+
+    /**
+     * Seems as though the measurementId column for alert conditions can
+     * equal 0 (or something else not found in the DB?)
+     *
+     * We safely avoid any problems by returning 'Unknown' for templates
+     * we can't find.
+     */
+    private getTemplate(int mid, typeBased) {
+        if (typeBased) {
+            try {
+                return metricHelper.findTemplateById(mid)
+            } catch (Exception e) {
+                log.warn("Lookup of template id=${mid} failed", e)
+            }
+        }
+        else {
+            return mMan.getMeasurement(mid)?.template
+        }
+        return null
     }
 
 

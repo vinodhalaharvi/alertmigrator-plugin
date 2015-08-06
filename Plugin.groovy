@@ -5,7 +5,7 @@ class Plugin extends HQUPlugin {
 
     void initialize(File pluginDir) {
         super.initialize(pluginDir)
-        addAdminView(true, '/api/index.hqu', 'AlertMigrator Web Services Api')
+        addAdminView(true, '/alertmigrator/index.hqu', 'AlertMigrator Web Services Api')
     }
 }
 
