@@ -74,7 +74,7 @@ class ResourceController extends ApiController {
             try {
                 return metricHelper.findTemplateById(mid)
             } catch (Exception e) {
-                log.warn("Lookup of template id=${mid} failed", e)
+                log.warn("HQPI WARN: Lookup of template id=${mid} failed", e)
             }
         }
         else {
@@ -237,7 +237,7 @@ class ResourceController extends ApiController {
                     if (c.type == EventConstants.TYPE_THRESHOLD) {
                         def metric = getTemplate(c.measurementId, d.typeBased)
                         if (!metric) {
-                            log.warn("Unable to find metric " + c.measurementId +
+                            log.warn("HQAPI WARN: Unable to find metric " + c.measurementId +
                                      "for definition " + d.name)
                             continue
                         } else {
@@ -248,7 +248,7 @@ class ResourceController extends ApiController {
                     } else if (c.type == EventConstants.TYPE_BASELINE) {
                         def metric = getTemplate(c.measurementId, d.typeBased)
                         if (!metric) {
-                            log.warn("Unable to find metric " + c.measurementId +
+                            log.warn("HQAPI WARN: Unable to find metric " + c.measurementId +
                                      "for definition " + d.name)
                             continue
                         } else {
@@ -260,7 +260,7 @@ class ResourceController extends ApiController {
                     } else if (c.type == EventConstants.TYPE_CHANGE) {
                         def metric = getTemplate(c.measurementId, d.typeBased)
                         if (!metric) {
-                            log.warn("Unable to find metric " + c.measurementId +
+                            log.warn("HQAPI WARN: Unable to find metric " + c.measurementId +
                                      "for definition " + d.name)
                             continue
                         } else {
@@ -277,7 +277,7 @@ class ResourceController extends ApiController {
                         if (alert == null) {
                             // TODO: This is not handled correctly in HQ.  NPE
                             //       is thrown rather than null returned.
-                            log.warn("Unable to find recover condition " +
+                            log.warn("HQAPI WARN: Unable to find recover condition " +
                                      c.measurementId + " for " + c.name)
                             continue
                         } else {
@@ -292,7 +292,7 @@ class ResourceController extends ApiController {
                         conditionAttrs["controlAction"] = c.name
                         conditionAttrs["controlStatus"] = c.optionStatus
                     } else {
-                        log.warn("Unhandled condition type " + c.type +
+                        log.warn("HQAPI WARN: Unhandled condition type " + c.type +
                                  " for condition " + c.name)
                     }
                     // Write it out
@@ -324,7 +324,7 @@ class ResourceController extends ApiController {
                         } else if (appdefType == 3) {
                             resource = resourceHelper.find('service':appdefId)
                         } else {
-                            log.warn("Unable to find resource appdefType=" +
+                            log.warn("HQAPI WARN: Unable to find resource appdefType=" +
                                      appdefType + " appdefId=" + appdefId)
                             continue // Skip this action
                         }
@@ -515,6 +515,31 @@ class ResourceController extends ApiController {
         return t.getMessage()
     }
 
+
+    /**
+     * Loop waiting for a resource to have it's metrics enabled.
+     */
+    private boolean metricsEnabled(res) {
+        for (int i = 0; i < 10; i++) {
+            def metrics = res.enabledMetrics
+            if (metrics.size() == 0) {
+                log.info("Metrics not yet enabled for new resource " + res.name +
+                         ", waiting...")
+                try {
+                    Thread.sleep(2000)
+                } catch (InterruptedException e) {
+                    // Ignore
+                }
+            } else {
+                log.info("Found " + metrics.size() + " metrics for " + res.name)
+                return true
+            }
+        }
+        return false
+    }
+
+
+
     def getResourcePrototypes(params) {
         def existing = params.getOne('existing')?.toBoolean()
 
@@ -647,7 +672,7 @@ class ResourceController extends ApiController {
                                          resourceXml.'@name' + "': " + cause)
                 }
             }
-            log.warn("Error creating resource", t)
+            log.warn("HQAPI WARN: Error creating resource", t)
             return
         }
 
@@ -676,6 +701,7 @@ class ResourceController extends ApiController {
             failureXml = getFailureXML(ErrorCode.OBJECT_NOT_FOUND,
                     "Resource id=" + rid +
                             " not found")
+            log.warn("HQAPI ERROR: " + "Resource id=" + rid + " not found")
             return
         }
 
@@ -688,6 +714,10 @@ class ResourceController extends ApiController {
                                           "Required attribute " + attr +
                                           " not found for definition " +
                                           xmlDef.'@name')
+              log.warn("HQAPI ERROR: " + 
+                      "Required attribute " + attr +
+                      " not found for definition " +
+                      xmlDef.'@name')
             }
         }
 
@@ -697,6 +727,10 @@ class ResourceController extends ApiController {
                                        "At least 1 AlertCondition is " +
                                        "required for definition " +
                                        xmlDef.'@name')
+            log.warn("HQAPI ERROR: "  
+                    + "At least 1 AlertCondition is " 
+                    + "required for definition " 
+                    + xmlDef.'@name')
         }
 
         // Configure any escalations
@@ -713,6 +747,9 @@ class ResourceController extends ApiController {
                 failureXml = getFailureXML(ErrorCode.OBJECT_NOT_FOUND,
                                            "Unable to find escalation with " +
                                            "name '" + escName + "'")
+               log.warn( "HQAPI ERROR: " + 
+               "Unable to find escalation with " +
+               "name '" + escName + "'")
             }
         }
 
@@ -723,6 +760,10 @@ class ResourceController extends ApiController {
                                        "AlertDefinition priority must be " +
                                        "between 1 (low) and 3 (high) " +
                                        "found=" + priority)
+               log.warn( "HQAPI ERROR: " + 
+                       "AlertDefinition priority must be " +
+                       "between 1 (low) and 3 (high) " +
+                       "found=" + priority)
         }
 
         // Alert frequency must be 0-4
@@ -732,6 +773,10 @@ class ResourceController extends ApiController {
                                        "AlertDefinition frequency must be " +
                                        "between 0 and 4 " +
                                        "found=" + frequency)
+               log.warn( "HQAPI ERROR: " + 
+                       "AlertDefinition frequency must be " +
+                       "between 0 and 4 " +
+                       "found=" + frequency)
         }
 
         // Error with AlertDefinition attributes
@@ -819,7 +864,7 @@ class ResourceController extends ApiController {
                 if (cResource != null && action != null) {
                     def actions = cResource.getControlActions(user)
                     if (!actions.find { it == action }) {
-                        log.warn("Resource " + cResource.name + " does not " +
+                        log.warn("HQAPI WARN: Resource " + cResource.name + " does not " +
                                  "support action " + action)
                         continue
                     }
@@ -830,7 +875,7 @@ class ResourceController extends ApiController {
                     cfg['params'] = par
                 } else {
                     // If the resource is not found, don't add the action
-                    log.warn("Ignoring invalid ControlAction config " +
+                    log.warn("HQAPI WARN: Ignoring invalid ControlAction config " +
                              xmlAction['AlertActionConfig'])
                     continue
                 }
@@ -846,13 +891,13 @@ class ResourceController extends ApiController {
                 def type = EMAIL_NOTIFY_TYPE.find { it.value == typeName }?.key
 
                 if (!type) {
-                    log.warn("Ignoring invalid EmailAction type " + typeName)
+                    log.warn("HQAPI WARN: Ignoring invalid EmailAction type " + typeName)
                     continue
                 }
 
                 def notificationIds = getNotificationIds(type, names)
                 if (notificationIds == null || notificationIds.length() == 0) {
-                    log.warn("Ignoring invalid EmailAction notification=" + names)
+                    log.warn("HQAPI WARN: Ignoring invalid EmailAction notification=" + names)
                     continue
                 }
 
@@ -880,6 +925,7 @@ class ResourceController extends ApiController {
                                               ['required','type'])
             if (acError != null) {
                 failureXml = acError
+                log.warn( "HQAPI ERROR: " + acError)  
                 break
             }
 
@@ -894,6 +940,7 @@ class ResourceController extends ApiController {
                                                        'thresholdValue'])
                     if (acError != null) {
                         failureXml = acError
+                        log.warn( "HQAPI ERROR: " + acError)  
                         break
                     }
 
@@ -906,6 +953,10 @@ class ResourceController extends ApiController {
                                                    "Unable to find metric " +
                                                    acv.name + " for " +
                                                    resource.name)
+                        log.warn( "HQAPI ERROR: "  + 
+                                   "Unable to find metric " +
+                                   acv.name + " for " +
+                                   resource.name)
                         break
                     }
 
@@ -921,6 +972,7 @@ class ResourceController extends ApiController {
                                                        'baselineType'])
                     if (acError != null) {
                         failureXml = acError
+                        log.warn( "HQAPI ERROR: "  +  acError)
                         break
                     }
 
@@ -933,6 +985,11 @@ class ResourceController extends ApiController {
                                                    "Unable to find metric " +
                                                    acv.name + " for " +
                                                    resource.name)
+                        log.warn( "HQAPI ERROR: "  + 
+                                   "Unable to find metric " +
+                                   acv.name + " for " +
+                                   resource.name)
+
                         break
                     }
 
@@ -958,6 +1015,7 @@ class ResourceController extends ApiController {
                                                        'controlStatus'])
                     if (acError != null) {
                         failureXml = acError
+                        log.warn( "HQAPI ERROR: "  +  acError)
                         break
                     }
 
@@ -968,6 +1026,9 @@ class ResourceController extends ApiController {
                         failureXml = getFailureXML(ErrorCode.INVALID_PARAMETERS,
                                                    "Invalid control condition " +
                                                    "status " + controlStatus)
+                        log.warn( "HQAPI ERROR: "  + 
+                                   "Invalid control condition " +
+                                   "status " + controlStatus)
                         break
                     }
 
@@ -980,6 +1041,7 @@ class ResourceController extends ApiController {
                                                       ['metricChange'])
                     if (acError != null) {
                         failureXml = acError
+                        log.warn( "HQAPI ERROR: "  + acError)
                         break
                     }
 
@@ -992,6 +1054,10 @@ class ResourceController extends ApiController {
                                                    "Unable to find metric " +
                                                    acv.name + " for " +
                                                    resource.name)
+                        log.warn( "HQAPI ERROR: "  + 
+                                   "Unable to find metric " +
+                                   acv.name + " for " +
+                                   resource.name)
                         break
                     }
                     acv.measurementId = template.id
@@ -1001,6 +1067,7 @@ class ResourceController extends ApiController {
                                                       ['recover'])
                     if (acError != null) {
                         failureXml = acError
+                        log.warn( "HQAPI ERROR: "  +  acError)
                         break
                     }
 
@@ -1026,6 +1093,10 @@ class ResourceController extends ApiController {
                                                    "Unable to find recovery " +
                                                    "with name '" +
                                                    xmlCond.'@recover' + "'")
+                        log.warn( "HQAPI ERROR: "  + 
+                                   "Unable to find recovery " +
+                                   "with name '" +
+                                   xmlCond.'@recover' + "'")
                     }
 
                     break
@@ -1034,6 +1105,7 @@ class ResourceController extends ApiController {
                                                       ['property'])
                     if (acError != null) {
                         failureXml = acError
+                        log.warn( "HQAPI ERROR: "  + acError)
                         break
                     }
                     acv.name = xmlCond.'@property'
@@ -1044,6 +1116,7 @@ class ResourceController extends ApiController {
                                                        'logMatches'])
                     if (acError != null) {
                         failureXml = acError
+                        log.warn( "HQAPI ERROR: "  +  acError)
                         break
                     }
 
@@ -1053,6 +1126,9 @@ class ResourceController extends ApiController {
                         failureXml = getFailureXML(ErrorCode.INVALID_PARAMETERS,
                                                    "Unknown log level " +
                                                    xmlCond.'@logLevel')
+                        log.warn( "HQAPI ERROR: "  + 
+                                   "Unknown log level " +
+                                   xmlCond.'@logLevel')
                         break
                     }
 
@@ -1071,6 +1147,10 @@ class ResourceController extends ApiController {
                                                "Unhandled AlertCondition " +
                                                "type " + acv.type + " for " +
                                                adv.name)
+                    log.warn( "HQAPI ERROR: "  + 
+                           "Unhandled AlertCondition " +
+                           "type " + acv.type + " for " +
+                           adv.name)
             }
 
             // Error with AlertCondition
@@ -1113,10 +1193,12 @@ class ResourceController extends ApiController {
             }
         } catch (PermissionException e) {
             failureXml = getFailureXML(ErrorCode.PERMISSION_DENIED)
+            log.warn( "HQAPI ERROR: "  +  failureXml)
         } catch (Exception e) {
             log.error("Error updating alert definition", e)
             failureXml = getFailureXML(ErrorCode.UNEXPECTED_ERROR,
                                        e.getMessage())
+            log.warn( "HQAPI ERROR: "  +  failureXml)
         }
 
         // Error with save/update
@@ -1135,7 +1217,7 @@ class ResourceController extends ApiController {
         if (escalation) {
             // TODO: Backend should handle escalations on recovery alerts
             if (isRecovery) {
-                log.warn("Skipping escalation for definition '" + pojo.name +
+                log.warn("HQAPI WARN: Skipping escalation for definition '" + pojo.name +
                          "'.  Escalations not allowed for recovery alerts.")
             } else {
                 pojo.setEscalation(user, escalation)
@@ -1225,7 +1307,7 @@ class ResourceController extends ApiController {
                                          cause);
                 }
             }
-            log.warn("Error creating resource", t)
+            log.warn("HQAPI WARN: Error creating resource", t)
             return null
         }
         return resource
@@ -1247,61 +1329,102 @@ class ResourceController extends ApiController {
             type1.AlertDefinition.each{ alert ->
                 log.warn("HQAPI INFO: creating alert " + alert.'@name' + " for resource with id " + type1.'@copyToId')
                 def res = createAlertDefinition(alert, type1.'@copyToId'?.toInteger())
+
                 if (res == null) { 
                     out << getFailureXML(ErrorCode.INVALID_PARAMETERS, "HQAPI WARN: Some alertdefinitions have not been copied " + 
                     "successfully. Please login to GUI and check results manually") 
                 } else { 
+                    log.warn("HQAPI INFO: created alert " + alert.'@name' + " for resource with id " + type1.'@copyToId')
                     out << getSuccessXML()
                 }
             }
-            return 
 
             type1.Resource.each {
                 type2 ->
 
                 //type2 work 
-                def server = createResource(type1.'@copyToId'?.toInteger(), type2, type2.ResourcePrototype.'@name')
-                if (server == null) {
-                    log.warn("HQAPI ERROR: Failed creating server.. " + type2.'@name' + "with prototype: " + type2.ResourcePrototype.'@name');
-                    failureXml = getFailureXML(ErrorCode.INVALID_PARAMETERS, 
-                        "HQAPI ERROR: Failed creating server.. " 
-                        + type2.'@name' + "with prototype: " 
-                        + type2.ResourcePrototype.'@name'
-                    ) 
-                } else { 
-                    log.warn("HQAPI INFO: created server.. " + type2.'@name' 
-                    + "with prototype: " + type2.ResourcePrototype.'@name' 
-                    + "with resource id: " + server.id);
-                    failureXml = getFailureXML(ErrorCode.INVALID_PARAMETERS)
+                def server
+                try { 
+                        server = createResource(type1.'@copyToId'?.toInteger(), type2, type2.ResourcePrototype.'@name')
+
+                        if (server == null) {
+                            log.warn("HQAPI ERROR: Failed creating server.. " + type2.'@name' + " with prototype: " + type2.ResourcePrototype.'@name');
+                            failureXml = getFailureXML(ErrorCode.INVALID_PARAMETERS, 
+                                    "HQAPI ERROR: Failed creating server.. " 
+                                    + type2.'@name' + " with prototype: " 
+                                    + type2.ResourcePrototype.'@name'
+                                    ) 
+                        } else { 
+                            log.warn("HQAPI INFO: created server.. " + type2.'@name' 
+                                    + " with prototype: " + type2.ResourcePrototype.'@name' 
+                                    + " with resource id: " + server.id);
+                            failureXml = getFailureXML(ErrorCode.INVALID_PARAMETERS)
+                        }
+
+                } catch (Exception e) { 
+                    //log and move forward
+                    log.warn("HQAPI ERROR: Failed creating server.. " + type2.'@name' + " with prototype: " + type2.ResourcePrototype.'@name');
                 }
+
 
                 type2.Resource.each {
                     type3 ->
 
                     //type3 work 
-                    def service = createResource(server.id, type3, type3.ResourcePrototype.'@name')
-                    if (service == null) {
-                        log.warn("HQAPI ERROR: Failed creating server.. " + type2.'@name' + "with prototype: " + type2.ResourcePrototype.'@name');
-                        failureXml = getFailureXML(ErrorCode.INVALID_PARAMETERS, 
-                           "HQAPI Error creating service.. " + type3.'@name' + "with prototype: " 
-                           + type3.ResourcePrototype.'@name' + "with resource id: "
-                        )
-                    } else { 
-                        log.warn("HQAPI INFO: created service.. " 
-                        + type3.'@name' + "with prototype: " 
-                        + type3.ResourcePrototype.'@name' 
-                        + "with resource id: " + service.id);
-
-                        log.warn("HQAPI INFO: creating alerts for resource: " + service.name + " with resource id : " + serivce.id)
-                        type3.AlertDefinition?.each{ alert ->
-                            def res = createAlertDefinition(alert, service)
-                            if (res == null) { 
-                                out << getFailureXML( "Some alertdefinitions have not been copied " + 
-                                "successfully. Please login to GUI and check results manually") 
+                    def service
+                    try { 
+                            service = createResource(server.id, type3, type3.ResourcePrototype.'@name')
+                            if (service == null) {
+                                log.warn("HQAPI ERROR: Failed creating server.. " + type2.'@name' + " with prototype: " + type2.ResourcePrototype.'@name');
+                                failureXml = getFailureXML(ErrorCode.INVALID_PARAMETERS, 
+                                        "HQAPI Error creating service.. " + type3.'@name' + " with prototype: " 
+                                        + type3.ResourcePrototype.'@name' + " with resource id: "
+                                        )
                             } else { 
-                                out << getSuccessXML()
+                                log.warn("HQAPI INFO: created service.. " 
+                                        + type3.'@name' + " with prototype: " 
+                                        + type3.ResourcePrototype.'@name' 
+                                        + " with resource id: " + service.id);
+
+                                type3.AlertDefinition?.each{ 
+                                        alert ->
+                                        try { 
+                                            log.warn("HQAPI INFO: creating alert " + alert.'@name' + " for resource: " 
+                                                    + service.name + " with resource id : " + service.id)
+
+                                            if (metricsEnabled(service)) { 
+                                                def res = createAlertDefinition(alert, service.id)
+                                            }
+
+
+                                            /*if (res == null) { 
+                                                out << getFailureXML( "Some alertdefinitions have not been copied " + 
+                                                        "successfully. Please login to GUI and check results manually") 
+                                            } else { 
+                                                log.warn("HQAPI INFO: created alerts for resource: " 
+                                                                + service.name + " with resource id : " + service.id)
+                                                out << getSuccessXML()
+                                            }*/
+                                            log.warn("HQAPI INFO: created alert.. " 
+                                                        + " with name "  + alert.'@name' + " to resource "
+                                                        + type3.'@name' + " with prototype: " 
+                                                        + type3.ResourcePrototype.'@name');
+                                        } catch (Exception e) { 
+                                            log.warn("HQAPI ERROR: Failed creating alert.. " 
+                                                        + " with name "  + alert.'@name' + " to resource "
+                                                        + type3.'@name' + " with prototype: " 
+                                                        + type3.ResourcePrototype.'@name');
+
+                                            StringWriter errors = new StringWriter();
+                                            e.printStackTrace(new PrintWriter(errors));
+                                            log.warn("HQAPI ERROR: " +  errors.toString());
+                                        }
+                                    }
                             }
-                        }
+                    } catch (Exception e) { 
+                        //ignore and move forward to the next resource
+                        //log and move forward
+                        //log.warn("HQAPI ERROR: Failed creating service.. " + type3.'@name' + " with prototype: " + type3.ResourcePrototype.'@name');
                     }
 
                 } //type3
@@ -1865,7 +1988,7 @@ class ResourceController extends ApiController {
                                                         user, config, agent, ips)
                 } catch (Throwable t) {
                     String cause = getCause(t)
-                    log.warn("Error creating resource", t)
+                    log.warn("HQPI WARN: Error creating resource", t)
                     return getFailureXML(ErrorCode.INVALID_PARAMETERS,
                                          "Error creating '" + name + "':" +
                                          cause);
@@ -1892,7 +2015,7 @@ class ResourceController extends ApiController {
                                                         user, config)
                 } catch (Throwable t) {
                     String cause = getCause(t)
-                    log.warn("Error creating resource", t)
+                    log.warn("HQPI WARN: Error creating resource", t)
                     return getFailureXML(ErrorCode.INVALID_PARAMETERS,
                                          "Error creating '" + name + "':" +
                                          cause);
@@ -1910,7 +2033,7 @@ class ResourceController extends ApiController {
                                                         user, config)  
                 } catch (Throwable t) {
                     String cause = getCause(t)
-                    log.warn("Error creating resource", t)
+                    log.warn("HQPI WARN: Error creating resource", t)
                     return getFailureXML(ErrorCode.INVALID_PARAMETERS,
                                          "Error creating '" + name + "':" +
                                          cause);
