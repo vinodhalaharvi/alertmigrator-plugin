@@ -520,13 +520,13 @@ class ResourceController extends ApiController {
      * Loop waiting for a resource to have it's metrics enabled.
      */
     private boolean metricsEnabled(res) {
-        for (int i = 0; i < 10; i++) {
+        for (int i = 0; i < 20; i++) {
             def metrics = res.enabledMetrics
             if (metrics.size() == 0) {
                 log.info("Metrics not yet enabled for new resource " + res.name +
                          ", waiting...")
                 try {
-                    Thread.sleep(2000)
+                    Thread.sleep(200)
                 } catch (InterruptedException e) {
                     // Ignore
                 }
@@ -1231,23 +1231,10 @@ class ResourceController extends ApiController {
         sess.flush()
         sess.clear()
         //}
-
-        //renderXml() {
-        /*out << AlertDefinitionsResponse() {
-            out << getSuccessXML()
-            for (alertdefid in definitions) {
-                out << getAlertDefinitionXML(aMan.getByIdNoCheck(alertdefid), false)
-            }
-        }*/
-        //}
     }
 
 
-
-
-
-
-    def createResource(parentId, xmlResource, prototypeName) {
+    def createResource1(parentId, xmlResource, prototypeName) {
         if (!xmlResource) {
             renderXml() {
                 ResourceResponse() {
@@ -1316,7 +1303,151 @@ class ResourceController extends ApiController {
 
 
 
+    def createResource(parentId, xmlResource, prototypeName) {
+        def failureXml = ""
+
+        if (!xmlResource) {
+            failureXml <<  getFailureXML(ErrorCode.INVALID_PARAMETERS)
+            log.warn("HQAPI ERROR: Error creating resource: " + failureXml)
+            return null
+        }
+
+        def parent = getResource(parentId.toInteger())
+        def prototype = resourceHelper.find(prototype: prototypeName)
+
+        if (!parent) {
+            failureXml << getFailureXML(ErrorCode.OBJECT_NOT_FOUND,
+                                 "Parent resource " +
+                                 parentId +
+                                 " not found")
+            log.warn("HQAPI ERROR: Error creating resource: " + failureXml)
+            return null
+        }
+
+        if (!prototype) {
+                    failureXml << getFailureXML(ErrorCode.OBJECT_NOT_FOUND,
+                                         "Resource type " +
+                                         prototypeName +
+                                         " not found")
+            log.warn("HQAPI ERROR: Error creating resource: " + failureXml)
+            return null
+        }
+
+        def resourceXml = xmlResource
+        def cfgXml = resourceXml['ResourceConfig']
+        def cfg = [:]
+        cfgXml.each { c ->
+            cfg.put(c.'@key', c.'@value')
+        }
+
+        def resource
+        try {
+            resource = prototype.createInstance(parent, resourceXml.'@name', user, cfg)
+            // Must loop waiting for metrics to be created in the background.
+        } catch (Throwable t) {
+            String cause = getCause(t)
+            failureXml << getFailureXML(ErrorCode.INVALID_PARAMETERS,
+                                 "Error creating '" +
+                                 resourceXml.'@name' + "': " +
+                                 cause)
+            log.warn("HQAPI ERROR: Error creating resource: " + failureXml)
+            return null
+        }
+
+        return resource
+    }
+
+
     def create(params) {
+        def createRequest = new XmlParser().parseText(getPostData())
+        for (type1 in createRequest.Resource) { 
+            try {
+                for(alert in type1.AlertDefinition) { 
+                    //create alertdefinition
+                    def result = createAlertDefinition(alert, type1.'@copyToId'?.toInteger())
+                    /*if (result == null)  
+                        continue */
+                    log.warn("HQAPI INFO: Successfully created alertDefinition " + alert.'@name' + " for resource with id " + type1.'@copyToId')
+                }
+            } catch(Throwable t) {
+                //log and break
+                log.warn("HQAPI ERROR: failed creating  AlertDefinition " + alert.'@name' + " for resource with id " + type1.'@copyToId')
+                String cause = getCause(t)
+                log.warn("HQAPI ERROR: Error creating AlertDefinition: " + cause)
+                continue
+            }
+
+
+            for(type2 in type1.Resource){ 
+                try {
+                    //create server 
+                    def server = createResource(type1.'@copyToId'?.toInteger(), type2, type2.ResourcePrototype.'@name')
+                    /*if (server == null) 
+                        continue */
+                    log.warn("HQAPI INFO: successfully created server.. " + type2.'@name' 
+                            + " with prototype: " + type2.ResourcePrototype.'@name' 
+                            + " with resource id: " + server.id);
+                    for (type3 in type2.Resource){ 
+                        try {
+                            //create service
+                            def  service
+                            service = createResource(server.id, type3, type3.ResourcePrototype.'@name')
+                            /*if (service == null) 
+                                break*/
+                            log.warn("HQAPI INFO: Successfully created service.. " + type3.'@name' + " with prototype: " + type3.ResourcePrototype.'@name');
+                            for(alert in type3.AlertDefinition) { 
+                                try {
+                                    //create service AlertDefinition
+                                    def result
+                                    if (metricsEnabled(service)) { 
+                                        result = createAlertDefinition(alert, service.id)
+                                    }
+                                    /*if (result == null) 
+                                        break*/
+                                    log.warn("HQAPI INFO: successfully created AlertDefinition.. " 
+                                                + " with name "  + alert.'@name' + " to resource "
+                                                + type3.'@name' + " with prototype: " 
+                                                + type3.ResourcePrototype.'@name');
+                                } catch(Throwable t) {
+                                    //log and break
+                                    log.warn("HQAPI INFO: Failed craeating AlertDefinition.. " 
+                                                + " with name "  + alert.'@name' + " to resource "
+                                                + type3.'@name' + " with prototype: " 
+                                                + type3.ResourcePrototype.'@name');
+                                    String cause = getCause(t)
+                                    log.warn("HQAPI ERROR: Error creating AlertDefinition: " + cause)
+                                    continue
+                                }
+                            }
+                        } catch(Throwable t) {
+                            //log and break
+                            log.warn("HQAPI ERROR: Failed creating service.. " + type3.'@name' + " with prototype: " + type3.ResourcePrototype.'@name');
+                            String cause = getCause(t)
+                            log.warn("HQAPI ERROR: Error creating service: " + cause)
+                            throw new RuntimeException("HQAPI ERROR: Error creating service: " + cause)
+                            break
+                        }
+                    }
+                } catch(Throwable t) {
+                    //log  and break
+                    log.warn("HQAPI ERROR: Failed creating server.. " + type2.'@name' + " with prototype: " + type2.ResourcePrototype.'@name');
+                    String cause = getCause(t)
+                    log.warn("HQAPI ERROR: Error creating server: " + cause)
+                    break
+                }
+            }
+        }
+
+        renderXml() {
+            StatusResponse() {
+                out << "<done>Check the log files for error messages if any</done>"
+            }
+        }
+
+    }
+
+
+    def create1(params) {
         def out = ""
         def failureXml = null
         def createRequest = new XmlParser().parseText(getPostData())
@@ -2054,6 +2185,8 @@ class ResourceController extends ApiController {
 
         return null
     }
+
+
 
     def sync1(params) {
 
