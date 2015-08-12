@@ -520,13 +520,13 @@ class ResourceController extends ApiController {
      * Loop waiting for a resource to have it's metrics enabled.
      */
     private boolean metricsEnabled(res) {
-        for (int i = 0; i < 20; i++) {
+        for (int i = 0; i < 10; i++) {
             def metrics = res.enabledMetrics
             if (metrics.size() == 0) {
                 log.info("Metrics not yet enabled for new resource " + res.name +
                          ", waiting...")
                 try {
-                    Thread.sleep(200)
+                    Thread.sleep(2000)
                 } catch (InterruptedException e) {
                     // Ignore
                 }
@@ -1234,101 +1234,26 @@ class ResourceController extends ApiController {
     }
 
 
-    def createResource1(parentId, xmlResource, prototypeName) {
-        if (!xmlResource) {
-            renderXml() {
-                ResourceResponse() {
-                    out << getFailureXML(ErrorCode.INVALID_PARAMETERS)
-                }
-            }
-            return null
-        }
-
-        def parent = getResource(parentId.toInteger())
-        def prototype = resourceHelper.find(prototype: prototypeName)
-
-        if (!parent) {
-            renderXml() {
-                ResourceResponse() {
-                    out << getFailureXML(ErrorCode.OBJECT_NOT_FOUND,
-                                         "Parent resource " +
-                                         parentId +
-                                         " not found")
-                }
-            }
-            return null
-        }
-
-        if (!prototype) {
-            renderXml() {
-                ResourceResponse() {
-                    out << getFailureXML(ErrorCode.OBJECT_NOT_FOUND,
-                                         "Resource type " +
-                                         prototypeName +
-                                         " not found")
-                }
-            }
-            return null
-        }
-
-        def resourceXml = xmlResource
-        def cfgXml = resourceXml['ResourceConfig']
-        def cfg = [:]
-        cfgXml.each { c ->
-            cfg.put(c.'@key', c.'@value')
-        }
-
-        def resource
-        try {
-            resource = prototype.createInstance(parent, resourceXml.'@name',
-                                                user, cfg)
-
-        // Must loop waiting for metrics to be created in the background.
-        } catch (Throwable t) {
-            String cause = getCause(t)
-            renderXml() {
-                ResourceResponse() {
-                    out << getFailureXML(ErrorCode.INVALID_PARAMETERS,
-                                         "Error creating '" +
-                                         resourceXml.'@name' + "': " +
-                                         cause);
-                }
-            }
-            log.warn("HQAPI WARN: Error creating resource", t)
-            return null
-        }
-        return resource
-    }
-
-
-
 
     def createResource(parentId, xmlResource, prototypeName) {
         def failureXml = ""
-
         if (!xmlResource) {
-            failureXml <<  getFailureXML(ErrorCode.INVALID_PARAMETERS)
+            failureXml <<  getFailureXML(ErrorCode.INVALID_PARAMETERS, "xmlResource cannot be null")
             log.warn("HQAPI ERROR: Error creating resource: " + failureXml)
             return null
         }
 
         def parent = getResource(parentId.toInteger())
         def prototype = resourceHelper.find(prototype: prototypeName)
-
         if (!parent) {
             failureXml << getFailureXML(ErrorCode.OBJECT_NOT_FOUND,
-                                 "Parent resource " +
-                                 parentId +
-                                 " not found")
+                                 "Parent resource " + parentId + " not found")
             log.warn("HQAPI ERROR: Error creating resource: " + failureXml)
             return null
         }
-
         if (!prototype) {
-                    failureXml << getFailureXML(ErrorCode.OBJECT_NOT_FOUND,
-                                         "Resource type " +
-                                         prototypeName +
-                                         " not found")
+            failureXml << getFailureXML(ErrorCode.OBJECT_NOT_FOUND,
+                                 "Resource type " + prototypeName + " not found")
             log.warn("HQAPI ERROR: Error creating resource: " + failureXml)
             return null
         }
@@ -1347,13 +1272,10 @@ class ResourceController extends ApiController {
         } catch (Throwable t) {
             String cause = getCause(t)
             failureXml << getFailureXML(ErrorCode.INVALID_PARAMETERS,
-                                 "Error creating '" +
-                                 resourceXml.'@name' + "': " +
-                                 cause)
+                             "Error creating '" + resourceXml.'@name' + "': " + cause)
             log.warn("HQAPI ERROR: Error creating resource: " + failureXml)
             return null
         }
-
         return resource
     }
 
@@ -1365,9 +1287,15 @@ class ResourceController extends ApiController {
                 for(alert in type1.AlertDefinition) { 
                     //create alertdefinition
                     def result = createAlertDefinition(alert, type1.'@copyToId'?.toInteger())
-                    /*if (result == null)  
-                        continue */
-                    log.warn("HQAPI INFO: Successfully created alertDefinition " + alert.'@name' + " for resource with id " + type1.'@copyToId')
+                    if (result == null){ 
+                        log.warn("HQAPI INFO: Failed creating alertDefinition " 
+                        + alert.'@name' + " for resource with id " 
+                        + type1.'@copyToId')
+                    } else { 
+                        log.warn("HQAPI INFO: Successfully created alertDefinition " 
+                        + alert.'@name' + " for resource with id " 
+                        + type1.'@copyToId')
+                    }
                 }
             } catch(Throwable t) {
                 //log and break
@@ -1382,19 +1310,29 @@ class ResourceController extends ApiController {
                 try {
                     //create server 
                     def server = createResource(type1.'@copyToId'?.toInteger(), type2, type2.ResourcePrototype.'@name')
-                    /*if (server == null) 
-                        continue */
-                    log.warn("HQAPI INFO: successfully created server.. " + type2.'@name' 
-                            + " with prototype: " + type2.ResourcePrototype.'@name' 
-                            + " with resource id: " + server.id);
+                    if (server == null) {
+                        log.warn("HQAPI INFO: Failed creating server.. " + type2.'@name' 
+                                + " with prototype: " + type2.ResourcePrototype.'@name' 
+                                + " with resource id: " + server.id);
+                    } else { 
+                        log.warn("HQAPI INFO: successfully created server.. " + type2.'@name' 
+                                + " with prototype: " + type2.ResourcePrototype.'@name' 
+                                + " with resource id: " + server.id);
+                    }
                     for (type3 in type2.Resource){ 
                         try {
                             //create service
                             def  service
                             service = createResource(server.id, type3, type3.ResourcePrototype.'@name')
-                            /*if (service == null) 
-                                break*/
-                            log.warn("HQAPI INFO: Successfully created service.. " + type3.'@name' + " with prototype: " + type3.ResourcePrototype.'@name');
+                            if (service == null) { 
+                                log.warn("HQAPI INFO: Failed creating service.. " 
+                                + type3.'@name' + " with prototype: " 
+                                + type3.ResourcePrototype.'@name');
+                            } else { 
+                                log.warn("HQAPI INFO: Successfully created service.. " 
+                                + type3.'@name' + " with prototype: " 
+                                + type3.ResourcePrototype.'@name');
+                            }
                             for(alert in type3.AlertDefinition) { 
                                 try {
                                     //create service AlertDefinition
@@ -1402,12 +1340,17 @@ class ResourceController extends ApiController {
                                     if (metricsEnabled(service)) { 
                                         result = createAlertDefinition(alert, service.id)
                                     }
-                                    /*if (result == null) 
-                                        break*/
-                                    log.warn("HQAPI INFO: successfully created AlertDefinition.. " 
-                                                + " with name "  + alert.'@name' + " to resource "
-                                                + type3.'@name' + " with prototype: " 
-                                                + type3.ResourcePrototype.'@name');
+                                    if (result == null) { 
+                                        log.warn("HQAPI INFO: Failed creating AlertDefinition.. " 
+                                                    + " with name "  + alert.'@name' + " to resource "
+                                                    + type3.'@name' + " with prototype: " 
+                                                    + type3.ResourcePrototype.'@name');
+                                    } else { 
+                                        log.warn("HQAPI INFO: successfully created AlertDefinition.. " 
+                                                    + " with name "  + alert.'@name' + " to resource "
+                                                    + type3.'@name' + " with prototype: " 
+                                                    + type3.ResourcePrototype.'@name');
+                                    }
                                 } catch(Throwable t) {
                                     //log and break
                                     log.warn("HQAPI INFO: Failed craeating AlertDefinition.. " 
@@ -1445,135 +1388,6 @@ class ResourceController extends ApiController {
         }
 
     }
-
-
-    def create1(params) {
-        def out = ""
-        def failureXml = null
-        def createRequest = new XmlParser().parseText(getPostData())
-        //pp = new XmlNodePrinter(new PrintWriter(new StringWriter()), "  ")
-        //pp.print(xmlstring)
-
-        createRequest.Resource.each{
-            type1 ->
-
-            type1.AlertDefinition.each{ alert ->
-                log.warn("HQAPI INFO: creating alert " + alert.'@name' + " for resource with id " + type1.'@copyToId')
-                def res = createAlertDefinition(alert, type1.'@copyToId'?.toInteger())
-
-                if (res == null) { 
-                    out << getFailureXML(ErrorCode.INVALID_PARAMETERS, "HQAPI WARN: Some alertdefinitions have not been copied " + 
-                    "successfully. Please login to GUI and check results manually") 
-                } else { 
-                    log.warn("HQAPI INFO: created alert " + alert.'@name' + " for resource with id " + type1.'@copyToId')
-                    out << getSuccessXML()
-                }
-            }
-
-            type1.Resource.each {
-                type2 ->
-
-                //type2 work 
-                def server
-                try { 
-                        server = createResource(type1.'@copyToId'?.toInteger(), type2, type2.ResourcePrototype.'@name')
-
-                        if (server == null) {
-                            log.warn("HQAPI ERROR: Failed creating server.. " + type2.'@name' + " with prototype: " + type2.ResourcePrototype.'@name');
-                            failureXml = getFailureXML(ErrorCode.INVALID_PARAMETERS, 
-                                    "HQAPI ERROR: Failed creating server.. " 
-                                    + type2.'@name' + " with prototype: " 
-                                    + type2.ResourcePrototype.'@name'
-                                    ) 
-                        } else { 
-                            log.warn("HQAPI INFO: created server.. " + type2.'@name' 
-                                    + " with prototype: " + type2.ResourcePrototype.'@name' 
-                                    + " with resource id: " + server.id);
-                            failureXml = getFailureXML(ErrorCode.INVALID_PARAMETERS)
-                        }
-
-                } catch (Exception e) { 
-                    //log and move forward
-                    log.warn("HQAPI ERROR: Failed creating server.. " + type2.'@name' + " with prototype: " + type2.ResourcePrototype.'@name');
-                }
-
-
-                type2.Resource.each {
-                    type3 ->
-
-                    //type3 work 
-                    def service
-                    try { 
-                            service = createResource(server.id, type3, type3.ResourcePrototype.'@name')
-                            if (service == null) {
-                                log.warn("HQAPI ERROR: Failed creating server.. " + type2.'@name' + " with prototype: " + type2.ResourcePrototype.'@name');
-                                failureXml = getFailureXML(ErrorCode.INVALID_PARAMETERS, 
-                                        "HQAPI Error creating service.. " + type3.'@name' + " with prototype: " 
-                                        + type3.ResourcePrototype.'@name' + " with resource id: "
-                                        )
-                            } else { 
-                                log.warn("HQAPI INFO: created service.. " 
-                                        + type3.'@name' + " with prototype: " 
-                                        + type3.ResourcePrototype.'@name' 
-                                        + " with resource id: " + service.id);
-
-                                type3.AlertDefinition?.each{ 
-                                        alert ->
-                                        try { 
-                                            log.warn("HQAPI INFO: creating alert " + alert.'@name' + " for resource: " 
-                                                    + service.name + " with resource id : " + service.id)
-
-                                            if (metricsEnabled(service)) { 
-                                                def res = createAlertDefinition(alert, service.id)
-                                            }
-
-
-                                            /*if (res == null) { 
-                                                out << getFailureXML( "Some alertdefinitions have not been copied " + 
-                                                        "successfully. Please login to GUI and check results manually") 
-                                            } else { 
-                                                log.warn("HQAPI INFO: created alerts for resource: " 
-                                                                + service.name + " with resource id : " + service.id)
-                                                out << getSuccessXML()
-                                            }*/
-                                            log.warn("HQAPI INFO: created alert.. " 
-                                                        + " with name "  + alert.'@name' + " to resource "
-                                                        + type3.'@name' + " with prototype: " 
-                                                        + type3.ResourcePrototype.'@name');
-                                        } catch (Exception e) { 
-                                            log.warn("HQAPI ERROR: Failed creating alert.. " 
-                                                        + " with name "  + alert.'@name' + " to resource "
-                                                        + type3.'@name' + " with prototype: " 
-                                                        + type3.ResourcePrototype.'@name');
-
-                                            StringWriter errors = new StringWriter();
-                                            e.printStackTrace(new PrintWriter(errors));
-                                            log.warn("HQAPI ERROR: " +  errors.toString());
-                                        }
-                                    }
-                            }
-                    } catch (Exception e) { 
-                        //ignore and move forward to the next resource
-                        //log and move forward
-                        //log.warn("HQAPI ERROR: Failed creating service.. " + type3.'@name' + " with prototype: " + type3.ResourcePrototype.'@name');
-                    }
-
-                } //type3
-            } //type2
-        } //type1
-
-        renderXml() {
-            StatusResponse() {
-                if (failureXml) {
-                    out << failureXml
-                } else {
-                    out << getSuccessXML()
-                }
-            }
-        }
-    }
-
-
 
 
 
@@ -1663,6 +1477,7 @@ class ResourceController extends ApiController {
                 }
             }
         }
+        
     }
 
 
