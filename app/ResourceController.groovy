@@ -690,7 +690,6 @@ class ResourceController extends ApiController {
         def out = ""
         def definitions = []
         def sess = org.hyperic.hq.hibernate.SessionManager.currentSession()
-        //for (xmlDef in syncRequest['AlertDefinition']) {
         def failureXml = null
         def resource = null 
         boolean typeBased
@@ -781,12 +780,7 @@ class ResourceController extends ApiController {
 
         // Error with AlertDefinition attributes
         if (failureXml) {
-            renderXml() {
-                AlertDefinitionsResponse() {
-                    out << failureXml
-                }
-            }
-            return
+            return null
         }
 
         def aeid;
@@ -1155,12 +1149,7 @@ class ResourceController extends ApiController {
 
             // Error with AlertCondition
             if (failureXml) {
-                renderXml() {
-                    AlertDefinitionsResponse() {
-                        out << failureXml
-                    }
-                }
-                return
+                return null
             }
             adv.addCondition(acv)
         }
@@ -1203,12 +1192,7 @@ class ResourceController extends ApiController {
 
         // Error with save/update
         if (failureXml) {
-            renderXml() {
-                AlertDefinitionsResponse() {
-                    out << failureXml
-                }
-            }
-            return
+            return null
         }
 
         def pojo = aMan.getByIdNoCheck(adv.id)
@@ -1230,7 +1214,7 @@ class ResourceController extends ApiController {
         definitions << pojo.id
         sess.flush()
         sess.clear()
-        //}
+        return pojo.id
     }
 
 
@@ -1288,11 +1272,12 @@ class ResourceController extends ApiController {
                     //create alertdefinition
                     def result = createAlertDefinition(alert, type1.'@copyToId'?.toInteger())
                     if (result == null){ 
-                        log.warn("HQAPI INFO: Failed creating alertDefinition " 
+                        log.warn("HQAPI INFO: Failed creating alertDefinition "
                         + alert.'@name' + " for resource with id " 
                         + type1.'@copyToId')
                     } else { 
                         log.warn("HQAPI INFO: Successfully created alertDefinition " 
+                        + " with id " + result + " "
                         + alert.'@name' + " for resource with id " 
                         + type1.'@copyToId')
                     }
@@ -1304,8 +1289,7 @@ class ResourceController extends ApiController {
                 log.warn("HQAPI ERROR: Error creating AlertDefinition: " + cause)
                 continue
             }
-
-
+            
             for(type2 in type1.Resource){ 
                 try {
                     //create server 
@@ -1319,6 +1303,7 @@ class ResourceController extends ApiController {
                                 + " with prototype: " + type2.ResourcePrototype.'@name' 
                                 + " with resource id: " + server.id);
                     }
+
                     for (type3 in type2.Resource){ 
                         try {
                             //create service
@@ -1346,14 +1331,15 @@ class ResourceController extends ApiController {
                                                     + type3.'@name' + " with prototype: " 
                                                     + type3.ResourcePrototype.'@name');
                                     } else { 
-                                        log.warn("HQAPI INFO: successfully created AlertDefinition.. " 
+                                        log.warn("HQAPI INFO: successfully created AlertDefinition.. "  
+                                                    + " with id " + result + " "
                                                     + " with name "  + alert.'@name' + " to resource "
                                                     + type3.'@name' + " with prototype: " 
                                                     + type3.ResourcePrototype.'@name');
                                     }
                                 } catch(Throwable t) {
                                     //log and break
-                                    log.warn("HQAPI INFO: Failed craeating AlertDefinition.. " 
+                                    log.warn("HQAPI INFO: Failed creating AlertDefinition.. " 
                                                 + " with name "  + alert.'@name' + " to resource "
                                                 + type3.'@name' + " with prototype: " 
                                                 + type3.ResourcePrototype.'@name');
