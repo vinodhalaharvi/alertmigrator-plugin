@@ -523,7 +523,7 @@ class ResourceController extends ApiController {
         for (int i = 0; i < 10; i++) {
             def metrics = res.enabledMetrics
             if (metrics.size() == 0) {
-                log.info("Metrics not yet enabled for new resource " + res.name +
+                log.info("HQAPI INFO: Metrics not yet enabled for new resource " + res.name +
                          ", waiting...")
                 try {
                     Thread.sleep(2000)
@@ -531,7 +531,7 @@ class ResourceController extends ApiController {
                     // Ignore
                 }
             } else {
-                log.info("Found " + metrics.size() + " metrics for " + res.name)
+                log.info("HQAPI INFO: Found " + metrics.size() + " metrics for " + res.name)
                 return true
             }
         }
@@ -1322,9 +1322,14 @@ class ResourceController extends ApiController {
                                 try {
                                     //create service AlertDefinition
                                     def result
-                                    if (metricsEnabled(service)) { 
-                                        result = createAlertDefinition(alert, service.id)
+                                    if (!service) { 
+                                        continue
                                     }
+                                    if (metricsEnabled(service)) { 
+                                        //ignore and wait 
+                                    }
+                                    result = createAlertDefinition(alert, service.id)
+
                                     if (result == null) { 
                                         log.warn("HQAPI INFO: Failed creating AlertDefinition.. " 
                                                     + " with name "  + alert.'@name' + " to resource "
